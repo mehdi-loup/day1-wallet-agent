@@ -1,15 +1,24 @@
 'use client';
 
 import { useChat } from '@ai-sdk/react';
-import { useState } from 'react';
+import { DefaultChatTransport } from 'ai';
+import { useMemo, useRef, useState } from 'react';
 
 export default function Chat() {
   const [provider, setProvider] = useState<'anthropic' | 'openai'>('anthropic');
   const [input, setInput] = useState('');
 
-  const { messages, sendMessage, status } = useChat({
-    body: { provider },
-  });
+  // Ref so the transport closure always reads the latest provider without recreating
+  const providerRef = useRef(provider);
+  providerRef.current = provider;
+
+  // Transport is stable for the chat session lifetime; body fn is called per-request
+  const transport = useMemo(
+    () => new DefaultChatTransport({ body: () => ({ provider: providerRef.current }) }),
+    [],
+  );
+
+  const { messages, sendMessage, status } = useChat({ transport });
 
   const isStreaming = status === 'streaming';
 
