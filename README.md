@@ -1,36 +1,34 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# Wallet Agent — Day 1
 
-## Getting Started
+Streaming chat UI powered by [Vercel AI SDK](https://ai-sdk.dev) with swappable Anthropic / OpenAI providers. Built as Day 1 of a 21-day AI engineering sprint.
 
-First, run the development server:
+## Setup
 
 ```bash
-npm run dev
-# or
-yarn dev
-# or
+cp .env.example .env.local
+# fill in your keys
+pnpm install
 pnpm dev
-# or
-bun dev
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+Open [http://localhost:3000](http://localhost:3000).
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+## Provider toggle
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+Switch between Anthropic (Claude Haiku) and OpenAI (GPT-4o-mini) at runtime via the header buttons — no restart needed. The active provider is sent as a `provider` field in the POST body to `/api/chat`.
 
-## Learn More
+## Keys needed
 
-To learn more about Next.js, take a look at the following resources:
+| Variable | Where to get it |
+|---|---|
+| `ANTHROPIC_API_KEY` | console.anthropic.com |
+| `OPENAI_API_KEY` | platform.openai.com |
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+Only the key for the active provider is called per request.
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+## Known limitations
 
-## Deploy on Vercel
-
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
-
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+- No message persistence — refresh clears history
+- No tool calling yet (Day 3)
+- No structured output yet (Day 2)
+- No auth or rate limiting
