@@ -1,24 +1,20 @@
 'use client';
 
-import { useChat } from '@ai-sdk/react';
 import { useState } from 'react';
+import Link from 'next/link';
 import type { PortfolioSummary } from '@/lib/schemas/portfolio';
 
-export default function Chat() {
-  const [input, setInput] = useState('');
-  const { messages, sendMessage, status, error } = useChat();
-  const isStreaming = status === 'streaming';
-
+export default function Home() {
   const [address, setAddress] = useState('');
   const [portfolio, setPortfolio] = useState<PortfolioSummary | null>(null);
-  const [portfolioLoading, setPortfolioLoading] = useState(false);
-  const [portfolioError, setPortfolioError] = useState<string | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
   async function fetchPortfolio(e: React.FormEvent) {
     e.preventDefault();
-    setPortfolioError(null);
+    setError(null);
     setPortfolio(null);
-    setPortfolioLoading(true);
+    setLoading(true);
     try {
       const res = await fetch('/api/portfolio-summary', {
         method: 'POST',
@@ -29,165 +25,156 @@ export default function Chat() {
       if (!res.ok) throw new Error(data.error ?? 'Unknown error');
       setPortfolio(data);
     } catch (err) {
-      setPortfolioError(err instanceof Error ? err.message : 'Request failed');
+      setError(err instanceof Error ? err.message : 'Request failed');
     } finally {
-      setPortfolioLoading(false);
+      setLoading(false);
     }
   }
 
   return (
     <div className="min-h-screen bg-gray-950 text-gray-100 flex flex-col">
-      <header className="border-b border-gray-800 px-6 py-4">
-        <h1 className="text-lg font-semibold tracking-tight">Wallet Agent</h1>
+      <div className="fixed inset-0 bg-[linear-gradient(rgba(255,255,255,0.015)_1px,transparent_1px),linear-gradient(90deg,rgba(255,255,255,0.015)_1px,transparent_1px)] bg-[size:64px_64px] pointer-events-none" />
+
+      <header className="relative z-10 border-b border-gray-800/60 px-6 py-4 flex items-center justify-between">
+        <div className="flex items-center gap-3">
+          <div className="w-2 h-2 rounded-full bg-blue-400 animate-pulse" />
+          <span className="font-mono text-sm font-medium tracking-widest text-gray-300 uppercase">
+            Wallet Agent
+          </span>
+        </div>
+        <Link
+          href="/chat"
+          className="font-mono text-xs text-gray-600 hover:text-gray-400 transition-colors"
+        >
+          skip to chat →
+        </Link>
       </header>
 
-      <main className="flex-1 overflow-y-auto px-6 py-6 space-y-8 max-w-3xl mx-auto w-full">
+      <main className="relative z-10 flex-1 flex flex-col items-center justify-center px-6 py-16">
+        <div className="w-full max-w-xl space-y-10">
 
-        {/* Portfolio summary section */}
-        <section className="space-y-4">
-          <h2 className="text-sm font-medium text-gray-400 uppercase tracking-wider">Portfolio Summary</h2>
-          <form onSubmit={fetchPortfolio} className="flex gap-3">
+          <div className="space-y-3">
+            <h1 className="font-mono text-4xl font-bold tracking-tight text-white leading-tight">
+              Know your<br />
+              <span className="text-blue-400">on-chain position.</span>
+            </h1>
+            <p className="font-mono text-sm text-gray-500 leading-relaxed">
+              Paste an EVM wallet address. Get a structured summary<br />
+              of your holdings and a risk assessment — instantly.
+            </p>
+          </div>
+
+          <form onSubmit={fetchPortfolio} className="space-y-3">
             <input
               value={address}
               onChange={(e) => setAddress(e.target.value)}
-              placeholder="0x… wallet address"
-              className="flex-1 bg-gray-800 rounded-xl px-4 py-3 text-sm placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-blue-500 font-mono"
+              placeholder="0x…"
+              spellCheck={false}
+              className="w-full bg-gray-900 border border-gray-700 hover:border-gray-600 focus:border-blue-500 rounded-lg px-4 py-3.5 font-mono text-sm text-gray-100 placeholder-gray-600 focus:outline-none transition-colors"
             />
             <button
               type="submit"
-              disabled={!address.trim() || portfolioLoading}
-              className="bg-blue-600 hover:bg-blue-500 disabled:opacity-40 disabled:cursor-not-allowed px-5 py-3 rounded-xl text-sm font-medium transition-colors whitespace-nowrap"
+              disabled={!address.trim() || loading}
+              className="w-full bg-blue-600 hover:bg-blue-500 disabled:opacity-30 disabled:cursor-not-allowed rounded-lg px-4 py-3 font-mono text-sm font-medium transition-colors"
             >
-              {portfolioLoading ? 'Analyzing…' : 'Analyze'}
+              {loading ? (
+                <span className="flex items-center justify-center gap-2">
+                  <span className="w-1.5 h-1.5 rounded-full bg-white animate-pulse" />
+                  Analyzing…
+                </span>
+              ) : (
+                'Analyze wallet'
+              )}
             </button>
           </form>
 
-          {portfolioError && (
-            <div className="rounded-xl bg-red-950 border border-red-800 text-red-300 px-4 py-3 text-sm flex gap-2">
-              <span className="shrink-0">⚠</span>
-              {portfolioError}
+          {error && (
+            <div className="rounded-lg bg-red-950/50 border border-red-800/50 px-4 py-3 font-mono text-sm text-red-400 flex gap-2">
+              <span className="shrink-0">!</span>
+              {error}
             </div>
           )}
 
           {portfolio && (
-            <div className="rounded-xl bg-gray-800 border border-gray-700 overflow-hidden">
-              {/* Total */}
-              <div className="px-5 py-4 border-b border-gray-700 flex items-baseline justify-between">
-                <span className="text-sm text-gray-400">Total value</span>
-                <span className="text-2xl font-semibold tabular-nums">
-                  ${portfolio.totalUsd.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+            <div className="rounded-xl border border-gray-700/60 bg-gray-900/40 overflow-hidden divide-y divide-gray-800/60">
+              <div className="px-6 py-5 flex items-baseline justify-between">
+                <span className="font-mono text-xs text-gray-500 uppercase tracking-widest">
+                  Net worth
+                </span>
+                <span className="font-mono text-3xl font-bold tabular-nums">
+                  ${portfolio.totalUsd.toLocaleString('en-US', { minimumFractionDigits: 2 })}
                 </span>
               </div>
 
-              {/* Top holdings */}
-              <div className="px-5 py-4 border-b border-gray-700">
-                <p className="text-xs text-gray-500 uppercase tracking-wider mb-3">Top holdings</p>
-                <table className="w-full text-sm">
-                  <thead>
-                    <tr className="text-gray-500 text-xs">
-                      <th className="text-left pb-2 font-medium">Asset</th>
-                      <th className="text-right pb-2 font-medium">Balance</th>
-                      <th className="text-right pb-2 font-medium">USD</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-gray-700/50">
-                    {portfolio.topHoldings.map((h) => (
-                      <tr key={h.symbol}>
-                        <td className="py-2 font-mono font-medium">{h.symbol}</td>
-                        <td className="py-2 text-right tabular-nums text-gray-300">
-                          {h.balance.toLocaleString('en-US', { maximumFractionDigits: 4 })}
-                        </td>
-                        <td className="py-2 text-right tabular-nums">
-                          ${h.usd.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
+              <div className="px-6 py-5">
+                <p className="font-mono text-xs text-gray-500 uppercase tracking-widest mb-4">
+                  Top holdings
+                </p>
+                <div className="space-y-3">
+                  {portfolio.topHoldings.map((h) => {
+                    const pct = (h.usd / portfolio.totalUsd) * 100;
+                    return (
+                      <div key={h.symbol} className="space-y-1.5">
+                        <div className="flex items-center justify-between font-mono text-sm">
+                          <span className="text-gray-300 font-medium">{h.symbol}</span>
+                          <span className="tabular-nums text-gray-400">
+                            ${h.usd.toLocaleString('en-US', { minimumFractionDigits: 2 })}
+                          </span>
+                        </div>
+                        <div className="h-px bg-gray-800 rounded-full overflow-hidden">
+                          <div
+                            className="h-full bg-blue-500 rounded-full"
+                            style={{ width: `${pct}%` }}
+                          />
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
               </div>
 
-              {/* Risk notes */}
-              <div className="px-5 py-4">
-                <p className="text-xs text-gray-500 uppercase tracking-wider mb-2">Risk notes</p>
-                <p className="text-sm text-gray-300 leading-relaxed">{portfolio.riskNotes}</p>
-                <p className="text-xs text-gray-600 mt-3">
-                  Generated {new Date(portfolio.generatedAt).toLocaleString()}
+              <div className="px-6 py-5">
+                <p className="font-mono text-xs text-gray-500 uppercase tracking-widest mb-2">
+                  Risk assessment
+                </p>
+                <p className="font-mono text-sm text-gray-300 leading-relaxed">
+                  {portfolio.riskNotes}
                 </p>
               </div>
+
+              <div className="px-6 py-5 bg-gray-900/30">
+                <Link href="/chat" className="group flex items-center justify-between w-full">
+                  <div>
+                    <p className="font-mono text-sm font-medium text-white group-hover:text-blue-400 transition-colors">
+                      Dive in →
+                    </p>
+                    <p className="font-mono text-xs text-gray-500 mt-0.5">
+                      Chat with your portfolio data
+                    </p>
+                  </div>
+                  <div className="w-8 h-8 rounded-full border border-gray-700 group-hover:border-blue-500 group-hover:bg-blue-500/10 flex items-center justify-center transition-all">
+                    <span className="text-gray-500 group-hover:text-blue-400 text-sm transition-colors">
+                      →
+                    </span>
+                  </div>
+                </Link>
+              </div>
             </div>
           )}
-        </section>
 
-        {/* Chat section */}
-        <section className="space-y-4">
-          <h2 className="text-sm font-medium text-gray-400 uppercase tracking-wider">Chat</h2>
-          {messages.length === 0 && (
-            <p className="text-gray-500 text-sm text-center py-8">
-              Ask about your crypto portfolio, wallet balances, or DeFi positions.
+          {!portfolio && !loading && (
+            <p className="font-mono text-xs text-gray-600 text-center">
+              or{' '}
+              <Link
+                href="/chat"
+                className="text-gray-500 hover:text-gray-300 underline underline-offset-4 transition-colors"
+              >
+                jump straight to chat →
+              </Link>
             </p>
           )}
-          {messages.map((message) => (
-            <div
-              key={message.id}
-              className={`flex ${message.role === 'user' ? 'justify-end' : 'justify-start'}`}
-            >
-              <div
-                className={`max-w-[80%] rounded-2xl px-4 py-3 text-sm leading-relaxed ${
-                  message.role === 'user'
-                    ? 'bg-blue-600 text-white'
-                    : 'bg-gray-800 text-gray-100'
-                }`}
-              >
-                {message.parts.map((part, i) =>
-                  part.type === 'text' ? <span key={i}>{part.text}</span> : null,
-                )}
-              </div>
-            </div>
-          ))}
-          {isStreaming && (
-            <div className="flex justify-start">
-              <div className="bg-gray-800 rounded-2xl px-4 py-3 text-sm text-gray-400 animate-pulse">
-                thinking…
-              </div>
-            </div>
-          )}
-          {error && (
-            <div className="flex justify-start">
-              <div className="max-w-[80%] rounded-2xl px-4 py-3 text-sm leading-relaxed bg-red-950 border border-red-800 text-red-300 flex items-start gap-2">
-                <span className="shrink-0">⚠</span>
-                <p className="flex-1">{error.message || 'Something went wrong. Please try again.'}</p>
-              </div>
-            </div>
-          )}
-        </section>
+        </div>
       </main>
-
-      <footer className="border-t border-gray-800 px-6 py-4">
-        <form
-          onSubmit={(e) => {
-            e.preventDefault();
-            if (!input.trim() || isStreaming) return;
-            sendMessage({ text: input });
-            setInput('');
-          }}
-          className="flex gap-3 max-w-3xl mx-auto"
-        >
-          <input
-            value={input}
-            onChange={(e) => setInput(e.target.value)}
-            placeholder="Ask about your portfolio…"
-            disabled={isStreaming}
-            className="flex-1 bg-gray-800 rounded-xl px-4 py-3 text-sm placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:opacity-50"
-          />
-          <button
-            type="submit"
-            disabled={!input.trim() || isStreaming}
-            className="bg-blue-600 hover:bg-blue-500 disabled:opacity-40 disabled:cursor-not-allowed px-5 py-3 rounded-xl text-sm font-medium transition-colors"
-          >
-            Send
-          </button>
-        </form>
-      </footer>
     </div>
   );
 }
