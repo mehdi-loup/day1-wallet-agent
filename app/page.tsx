@@ -34,7 +34,6 @@ function WalletMenu({ address, onDisconnect }: { address: string; onDisconnect: 
       >
         <span className="w-1.5 h-1.5 rounded-full bg-green-400" />
         <span className="font-mono text-xs text-gray-300">{truncate(address)}</span>
-        <span className="font-mono text-xs text-gray-500">{open ? '▴' : '▾'}</span>
       </button>
 
       {open && (
@@ -101,7 +100,7 @@ export default function Home() {
     <div className="min-h-screen bg-gray-950 text-gray-100 flex flex-col">
       <div className="fixed inset-0 bg-[linear-gradient(rgba(255,255,255,0.015)_1px,transparent_1px),linear-gradient(90deg,rgba(255,255,255,0.015)_1px,transparent_1px)] bg-[size:64px_64px] pointer-events-none" />
 
-      <header className="relative z-10 border-b border-gray-800/60 px-6 py-4 flex items-center justify-between">
+      <header className="relative z-50 border-b border-gray-800/60 px-6 py-4 flex items-center justify-between">
         <div className="flex items-center gap-3">
           <div className="w-2 h-2 rounded-full bg-blue-400 animate-pulse" />
           <span className="font-mono text-sm font-medium tracking-widest text-gray-300 uppercase">
