@@ -28,10 +28,11 @@ export async function POST(req: Request) {
   const { walletAddress } = parsed.data;
   const walletData = getMockWalletData(walletAddress);
 
-  const { object } = await generateObject({
-    model: anthropic('claude-haiku-4-5-20251001'),
-    schema: PortfolioSummarySchema,
-    prompt: `You are a crypto portfolio analyst. Given the following wallet data, produce a structured summary.
+  try {
+    const { object } = await generateObject({
+      model: anthropic('claude-haiku-4-5-20251001'),
+      schema: PortfolioSummarySchema,
+      prompt: `You are a crypto portfolio analyst. Given the following wallet data, produce a structured summary.
 
 Wallet address: ${walletData.address}
 Holdings:
@@ -44,7 +45,11 @@ Instructions:
 - topHoldings: pick the top holdings by USD value (max 5), sorted descending
 - riskNotes: write 1–3 sentences assessing concentration risk, stablecoin ratio, or chain diversification
 - generatedAt: use the fetchedAt timestamp exactly`,
-  });
+    });
 
-  return Response.json(object);
+    return Response.json(object);
+  } catch (err) {
+    const message = err instanceof Error ? err.message : 'Failed to generate portfolio summary';
+    return Response.json({ error: message }, { status: 500 });
+  }
 }

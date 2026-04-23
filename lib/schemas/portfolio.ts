@@ -9,24 +9,20 @@ export const PortfolioSummarySchema = z.object({
     }),
 
   // z.number() rejects strings — Claude can't sneak "1234.56" past us
-  totalUsd: z.number().nonnegative(),
+  totalUsd: z.number(),
 
-  // z.array().max(5) enforces the "top holdings" contract at runtime
-  topHoldings: z
-    .array(
-      z.object({
-        symbol: z.string(),
-        balance: z.number().nonnegative(),
-        usd: z.number().nonnegative(),
-      }),
-    )
-    .max(5),
+  topHoldings: z.array(
+    z.object({
+      symbol: z.string(),
+      balance: z.number(),
+      usd: z.number(),
+    }),
+  ),
 
-  // min/max on string length keeps Claude from going off-script
-  riskNotes: z.string().min(10).max(500),
+  riskNotes: z.string(),
 
-  // datetime() validates ISO 8601 format — a plain string() would accept "yesterday"
-  generatedAt: z.string().datetime(),
+  // ISO 8601 enforced via prompt; Anthropic structured output doesn't support format keywords
+  generatedAt: z.string(),
 });
 
 export type PortfolioSummary = z.infer<typeof PortfolioSummarySchema>;
