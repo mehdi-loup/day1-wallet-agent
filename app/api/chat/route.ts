@@ -22,10 +22,10 @@ import { getWalletTokens } from '@/lib/tools/wallet';
  */
 
 const SYSTEM_PROMPT = `You are a crypto portfolio assistant. You have two tools:
-- getTokenPrice: call this when the user asks about the current price of a token
-- getWalletTokens: call this when the user provides a wallet address and wants to see holdings
+- getWalletTokens: call this when the user provides a wallet address. Returns holdings with balanceUSD per token already included — do NOT follow up with getTokenPrice calls to value the portfolio.
+- getTokenPrice: call this only for standalone price queries (e.g. "what's ETH at right now?").
 
-For portfolio value questions, call getWalletTokens first, then getTokenPrice for each token symbol in the result, then sum and reply. Be concise and precise — your users are technical.`;
+Be concise and precise — your users are technical.`;
 
 export async function POST(req: Request) {
   try {
