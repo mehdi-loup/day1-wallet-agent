@@ -1,6 +1,7 @@
 'use client';
 
 import { useChat } from '@ai-sdk/react';
+import { isToolUIPart, getToolName } from 'ai';
 import { useState } from 'react';
 import Link from 'next/link';
 
@@ -45,19 +46,56 @@ export default function ChatPage() {
         {messages.map((message) => (
           <div
             key={message.id}
-            className={`flex ${message.role === 'user' ? 'justify-end' : 'justify-start'}`}
+            className={`flex flex-col gap-2 ${message.role === 'user' ? 'items-end' : 'items-start'}`}
           >
-            <div
-              className={`max-w-[80%] rounded-2xl px-4 py-3 font-mono text-sm leading-relaxed ${
-                message.role === 'user'
-                  ? 'bg-blue-600 text-white'
-                  : 'bg-gray-800/80 border border-gray-700/50 text-gray-100'
-              }`}
-            >
-              {message.parts.map((part, i) =>
-                part.type === 'text' ? <span key={i}>{part.text}</span> : null,
-              )}
-            </div>
+            {message.parts.map((part, i) => {
+              if (part.type === 'text') {
+                return (
+                  <div
+                    key={i}
+                    className={`max-w-[80%] rounded-2xl px-4 py-3 font-mono text-sm leading-relaxed ${
+                      message.role === 'user'
+                        ? 'bg-blue-600 text-white'
+                        : 'bg-gray-800/80 border border-gray-700/50 text-gray-100'
+                    }`}
+                  >
+                    {part.text}
+                  </div>
+                );
+              }
+
+              if (isToolUIPart(part)) {
+                const isPending =
+                  part.state === 'input-streaming' || part.state === 'input-available';
+                const isError = part.state === 'output-error';
+                const result = part.state === 'output-available' ? part.output : null;
+
+                return (
+                  <div
+                    key={i}
+                    className="max-w-[80%] rounded-xl border border-gray-700/60 bg-gray-900/60 px-3 py-2 font-mono text-xs"
+                  >
+                    <div className="flex items-center gap-2 text-gray-400">
+                      <span className={isPending ? 'animate-pulse' : ''}>⚙</span>
+                      <span className="text-gray-300">{getToolName(part)}</span>
+                      <span className="text-gray-600">
+                        {JSON.stringify(part.input ?? {})}
+                      </span>
+                    </div>
+                    {result != null && (
+                      <div className="mt-1 text-emerald-400 truncate">
+                        → {JSON.stringify(result)}
+                      </div>
+                    )}
+                    {isError && (
+                      <div className="mt-1 text-red-400">→ error</div>
+                    )}
+                  </div>
+                );
+              }
+
+              return null;
+            })}
           </div>
         ))}
 
