@@ -4,6 +4,7 @@
   "private": true,
   "scripts": {
     "dev": "next dev",
+    "mastra:dev": "mastra dev",
     "build": "next build",
     "start": "next start",
     "lint": "eslint"
@@ -11,8 +12,15 @@
   "dependencies": {
     "@ai-sdk/anthropic": "^3.0.71",
     "@ai-sdk/react": "^3.0.170",
+    "@mastra/core": "^1.28.0",
+    "@mastra/duckdb": "^1.2.0",
+    "@mastra/libsql": "^1.9.0",
+    "@mastra/loggers": "^1.1.1",
+    "@mastra/memory": "^1.17.1",
+    "@mastra/observability": "^1.10.0",
     "@privy-io/react-auth": "^3.22.1",
     "ai": "^6.0.168",
+    "mastra": "^1.6.3",
     "next": "16.2.4",
     "react": "19.2.4",
     "react-dom": "19.2.4",
