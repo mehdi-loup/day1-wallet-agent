@@ -1,6 +1,8 @@
 import { createStep, createWorkflow } from '@mastra/core/workflows';
 import { generateObject } from 'ai';
-import { anthropic } from '@ai-sdk/anthropic';
+import { createAnthropic } from '@ai-sdk/anthropic';
+
+const anthropicProvider = createAnthropic({ baseURL: 'https://api.anthropic.com/v1' });
 import { z } from 'zod';
 import { getMockWalletData } from '../../../lib/mock-wallet';
 import { fetchZapperPortfolio } from '../../../lib/zapper';
@@ -98,7 +100,7 @@ const summariseStep = createStep({
     );
 
     const { object } = await generateObject({
-      model: anthropic('claude-haiku-4-5-20251001'),
+      model: anthropicProvider('claude-haiku-4-5-20251001'),
       schema: PortfolioSummarySchema,
       prompt: `Summarise this crypto portfolio.
 
