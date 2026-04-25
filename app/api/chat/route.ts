@@ -36,7 +36,35 @@ export async function POST(req: Request) {
       system: SYSTEM_PROMPT,
       messages: await convertToModelMessages(messages),
       tools: { getTokenPrice, getWalletTokens },
-      stopWhen: stepCountIs(5),
+      // OR semantics: any one condition firing stops the loop.
+      // stepCountIs(6): hard ceiling — 6 gives room for getWalletTokens + a few
+      //   price lookups + final synthesis without letting a confused model burn budget.
+      // Custom predicate: guards the specific runaway where the model calls getTokenPrice
+      //   repeatedly in a loop (e.g. re-fetching ETH on every step). 5 price calls in
+      //   one turn is a symptom of a broken reasoning loop, not a valid user flow.
+      stopWhen: [
+        stepCountIs(6),
+        ({ steps }) => {
+          const priceCalls = steps
+            .flatMap((s) => s.toolCalls ?? [])
+            .filter((c) => c.toolName === 'getTokenPrice').length;
+          return priceCalls >= 5;
+        },
+      ],
+      // onStepFinish fires after each LLM call completes — this is the foundation
+      // for Day 14's observability work (LangSmith / Langfuse). The structure here
+      // maps directly to what those tools expect: step index, tool activity, finish
+      // reason, and token usage per step.
+      onStepFinish({ stepNumber, toolCalls, finishReason, usage }) {
+        console.log(
+          JSON.stringify({
+            stepNumber,
+            toolCallsCount: toolCalls?.length ?? 0,
+            finishReason,
+            usage,
+          }),
+        );
+      },
     });
 
     return result.toUIMessageStreamResponse();
