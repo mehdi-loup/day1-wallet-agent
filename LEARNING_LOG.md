@@ -1,3 +1,78 @@
+# Day 6 Learning Log — Observability + Evals
+
+## Bugs surfaced by evals (note, don't fix yet)
+
+- **`empty-wallet` case fails.** `getMockWalletData` returns mock holdings for *any* address, including `0x000...0`. The agent therefore fabricates a non-empty portfolio instead of reporting "empty wallet." Fix: return empty holdings when address is the zero address, or when Zapper returns null and the address is clearly invalid. Don't remove the mock fallback entirely — it's needed for wallets Zapper doesn't index.
+- **Day 5 open thread resolved:** The workflow's `summarise` step uses raw `generateObject` inside a Mastra step. Confirmed that OTEL hooks into the AI SDK's underlying fetch, so the LLM call appears as a `model_generation` span in the trace automatically. No extra instrumentation needed.
+
+---
+
+## Self-evaluation quiz
+
+### Q1. What's the difference between a trace and an eval? Give a concrete failure mode each one catches that the other misses.
+
+**My answer:** An eval suite isn't enough because it's non-deterministic and can lead to false positive signals giving a sense of misleading confidence; it doesn't provide insights into technical performance like speed, reliability, or responsiveness. Traces aren't enough because they don't give any insights on quality; a system can yield a hallucination very fast.
+
+**Correction:** The first half conflates two distinct eval weaknesses. LLM-as-judge non-determinism is real but it's a weakness *within* evals, not the core weakness of an eval suite. The fundamental problem with a golden set is **coverage**: you only test the 10 cases you imagined. Unknown unknowns (the Solana address, the 200-token wallet) stay untested regardless of whether your judge is deterministic. The hallucination example for traces is exactly right — "a clean trace can still produce a wrong answer" is the canonical failure mode.
+
+Corrected mental model:
+- Evals miss what you didn't write down → **coverage gap**
+- Traces miss whether the output was actually correct → **quality gap**
+- LLM-as-judge additionally introduces noise *on top of* the eval layer
+
+---
+
+### Q2. You're debugging a slow agent run. Walk through the trace. What's the first span you look at, and what number counts as "bad"?
+
+**My answer:** Verify most time is spent on inference (the part I don't have control over). Verify the step didn't burn absurd tokens (~1000/step is non-negligible).
+
+**Correction — gap:** You spotted the token count but didn't ask *why* step 1 costs 985 input tokens for a 7-word question. The trace tells you: system prompt + tool result JSON + full message history all get re-injected into step 1's context. `lastMessages: 20` means even turn 0 carries ~900 tokens before the user says a word. Token cost is a function of memory window + system prompt length, not message length. Also: you said "verify quality and accuracy" — you can't do that from a trace. The trace shows the agent *used* the tool output faithfully; it doesn't verify whether the tool output was correct. That requires an eval.
+
+**First span to look at:** work the tree top-down: `model_step: step 1 = 2579ms` is the biggest number. Haiku averages 1–3s so this is normal. If `tool_call: getTokenPrice = 2000ms`, that's CoinGecko timing out — and that's something you can fix (cache, timeout, fallback).
+
+---
+
+### Q3. What's a deterministic eval structurally bad at catching? Give a case from today's eval run.
+
+**My answer:** A deterministic check verifies if there was a response, not if the response was sensical.
+
+**Correct.** The `empty-wallet` case: a deterministic check sees ✅ `getWalletTokens` was called, ✅ response contains text. It doesn't catch that the agent returned a fabricated non-empty portfolio for the zero-balance address. The judge caught it because it could reason about semantic content against the rubric. Deterministic → structure. Judge → semantics.
+
+---
+
+### Q4. The LLM-as-judge scores a response as failing, but you think the response was fine. Who's wrong and how do you tell?
+
+**My answer:** The judge can be wrong — it's non-deterministic with billions of parameters.
+
+**Correction:** Non-determinism is one failure mode, but *bias* is the deeper one. The judge systematically prefers verbose answers, penalises short ones, agrees with confident-sounding responses — consistently, not randomly. Non-determinism means variance run-to-run; bias means wrong in the same direction every time. To tell who's wrong: (1) read the response yourself — human review is ground truth for a golden set; (2) interrogate the rubric — vague rubrics produce noisy scores; (3) run the judge N times — if it flips 5/10, it's noise; 9/10, it's signal. If you can't tell: tighten the rubric, mark as informational, or document as flaky in LEARNING_LOG.
+
+---
+
+### Q5. When does snapshot testing actively hurt you for an LLM agent?
+
+**My answer:** Snapshots test deep equality; if values should have changed, I don't want a green check.
+
+**Correction — opposite failure mode:** That describes a snapshot that correctly *fails* when behavior changes. The dangerous case is the opposite: a **green snapshot giving false confidence**. The snapshot was written on the first run, which snapshotted whatever the agent produced that day — correct or not. If the `summarise` step was quietly producing wrong `riskNotes`, we snapshotted that wrong behavior. Every future run produces the same wrong output, the snapshot stays green, and we never notice. This is why our snapshot checks **shape** only (key names + types), not exact values — but even shape checking doesn't catch semantic regressions. Snapshot testing is a regression gate ("did it change?"), not a correctness gate ("was it ever right?").
+
+---
+
+## Concepts to walk into Day 7 already understanding
+
+1. **Trace anatomy** — agent_run → model_step (N) → tool_call / model_chunk → processor_run. Token usage and finishReason live on model_step attributes. Tool I/O lives on tool_call spans. Memory load/persist live on processor_run spans.
+2. **Observability vs evals split** — traces answer "what happened"; evals answer "was it correct." Neither substitutes for the other. A perfect trace can hide a hallucination; a green suite can hide production failures.
+3. **LLM-as-judge tradeoffs** — expensive (extra LLM call), non-deterministic (variance), biased (systematic preferences). Use when you can't write a boolean check. Treat scores as noisy signal, not ground truth.
+4. **Golden set structural weaknesses** — small N, curator bias, no behavioral coverage, stale baselines. Knowing these is more important than having a large suite.
+5. **DuckDB lock** — DuckDB uses an exclusive file lock. Running `pnpm eval` while `mastra dev` is open causes a lock conflict. The eval runner uses a separate `eval-mastra` instance (no DuckDB) to avoid this.
+
+## Open threads for Day 7
+
+- **`empty-wallet` mock bug** — `getMockWalletData` returns holdings for any address. Fix before Day 7 deploy so the eval suite is green.
+- **README still says "Day 1"** in its title — updated to Days 1–6 today but needs a proper rewrite for the public post.
+- **`ConsoleExporter` in production** — remove before Day 7 deploy; it's noisy in logs.
+- **Langfuse** — the docs only ship `DefaultExporter`, `ConsoleExporter`, `CloudExporter`. Langfuse requires a custom OTEL HTTP exporter — not mechanical enough for today. Worth wiring for the CV if you have 30 min.
+
+---
+
 # Day 5 Learning Log — Mastra Fundamentals
 
 ## Self-evaluation quiz
