@@ -7,13 +7,15 @@
     "mastra:dev": "mastra dev",
     "build": "next build",
     "start": "next start",
-    "lint": "eslint"
+    "lint": "eslint",
+    "eval": "tsx evals/run.ts"
   },
   "dependencies": {
     "@ai-sdk/anthropic": "^3.0.71",
     "@ai-sdk/react": "^3.0.170",
     "@mastra/core": "^1.28.0",
     "@mastra/duckdb": "^1.2.0",
+    "@mastra/evals": "^1.2.1",
     "@mastra/libsql": "^1.9.0",
     "@mastra/loggers": "^1.1.1",
     "@mastra/memory": "^1.17.1",
@@ -34,6 +36,7 @@
     "eslint": "^9",
     "eslint-config-next": "16.2.4",
     "tailwindcss": "^4",
+    "tsx": "^4.21.0",
     "typescript": "^5"
   }
 }
