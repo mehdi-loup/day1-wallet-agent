@@ -40,6 +40,13 @@ yarn-error.log*
 *.tsbuildinfo
 next-env.d.ts
 mastra.db
+eval.db
+eval.db-shm
+eval.db-wal
+observability.db
+observability.db-shm
+observability.db-wal
+src/mastra/public/
 mastra.db-shm
 mastra.db-wal
 .mastra/
