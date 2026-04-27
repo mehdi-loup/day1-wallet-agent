@@ -1,47 +1,40 @@
 import path from 'node:path';
 import { Mastra } from '@mastra/core/mastra';
-import { MastraCompositeStore } from '@mastra/core/storage';
 import { PinoLogger } from '@mastra/loggers';
 import { LibSQLStore } from '@mastra/libsql';
-import { DuckDBStore } from '@mastra/duckdb';
-import { Observability, DefaultExporter, ConsoleExporter } from '@mastra/observability';
+import { Observability } from '@mastra/observability';
+import { LangfuseExporter } from '@mastra/langfuse';
 import { portfolioAgent } from './agents/portfolio-agent';
 import { portfolioWorkflow } from './workflows/portfolio-workflow';
 
-// Local file path — only used when TURSO_DATABASE_URL is not set (local dev without Turso).
+// Fallback to local SQLite when Turso env vars are absent (local dev without credentials).
 const DB_PATH = path.join(process.cwd(), 'mastra.db');
-const OBS_DB_PATH = path.join(process.cwd(), 'observability.db');
 
-// MastraCompositeStore routes storage by domain:
-//   - default → LibSQL (OLTP: threads, messages, memory)
-//     Production: Turso remote instance (survives redeployments + is shared across instances).
-//     Local dev fallback: SQLite file (fine for single-process dev, invisible on Vercel).
-//   - observability → DuckDB (OLAP: spans, traces, metrics with aggregate queries)
-const duckdb = new DuckDBStore({ path: OBS_DB_PATH });
-
-const storage = new MastraCompositeStore({
-  id: 'composite-storage',
-  default: new LibSQLStore({
-    id: 'mastra-storage',
-    url: process.env.TURSO_DATABASE_URL ?? `file:${DB_PATH}`,
-    authToken: process.env.TURSO_AUTH_TOKEN,
-  }),
-  domains: {
-    observability: duckdb.observability,
-  },
+const storage = new LibSQLStore({
+  id: 'mastra-storage',
+  url: process.env.TURSO_DATABASE_URL ?? `file:${DB_PATH}`,
+  authToken: process.env.TURSO_AUTH_TOKEN,
 });
 
-// DefaultExporter → persists spans to DuckDB; Studio reads from there.
-// ConsoleExporter → prints span JSON to stdout so you can read traces without opening Studio.
-//   Remove ConsoleExporter in production — it's noisy.
+// LangfuseExporter sends spans over HTTPS to cloud.langfuse.com.
+// Unlike DefaultExporter (local DuckDB file), spans survive container teardown.
+// flush() must be awaited before the serverless function exits — see API route handler.
 const observability = new Observability({
   configs: {
     default: {
       serviceName: 'portfolio-agent',
-      exporters: [new DefaultExporter(), new ConsoleExporter()],
+      exporters: [
+        new LangfuseExporter({
+          publicKey: process.env.LANGFUSE_PUBLIC_KEY!,
+          secretKey: process.env.LANGFUSE_SECRET_KEY!,
+          baseUrl: process.env.LANGFUSE_BASE_URL,
+        }),
+      ],
     },
   },
 });
+
+export { observability };
 
 export const mastra = new Mastra({
   agents: { portfolioAgent },
