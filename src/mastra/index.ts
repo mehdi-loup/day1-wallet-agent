@@ -8,22 +8,23 @@ import { Observability, DefaultExporter, ConsoleExporter } from '@mastra/observa
 import { portfolioAgent } from './agents/portfolio-agent';
 import { portfolioWorkflow } from './workflows/portfolio-workflow';
 
-// Absolute path avoids the relative-path mismatch between `next dev` (cwd = project root)
-// and `mastra dev` (cwd may differ depending on how it's invoked).
+// Local file path — only used when TURSO_DATABASE_URL is not set (local dev without Turso).
 const DB_PATH = path.join(process.cwd(), 'mastra.db');
 const OBS_DB_PATH = path.join(process.cwd(), 'observability.db');
 
 // MastraCompositeStore routes storage by domain:
 //   - default → LibSQL (OLTP: threads, messages, memory)
+//     Production: Turso remote instance (survives redeployments + is shared across instances).
+//     Local dev fallback: SQLite file (fine for single-process dev, invisible on Vercel).
 //   - observability → DuckDB (OLAP: spans, traces, metrics with aggregate queries)
-// Without the domain split, trace queries run over SQLite — painful at volume.
 const duckdb = new DuckDBStore({ path: OBS_DB_PATH });
 
 const storage = new MastraCompositeStore({
   id: 'composite-storage',
   default: new LibSQLStore({
     id: 'mastra-storage',
-    url: `file:${DB_PATH}`,
+    url: process.env.TURSO_DATABASE_URL ?? `file:${DB_PATH}`,
+    authToken: process.env.TURSO_AUTH_TOKEN,
   }),
   domains: {
     observability: duckdb.observability,
