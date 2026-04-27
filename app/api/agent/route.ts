@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { mastra, observability } from '@/src/mastra';
+import { mastra, langfuseExporter } from '@/src/mastra';
 
 const RequestSchema = z.object({
   message: z.string().min(1),
@@ -27,8 +27,9 @@ export async function POST(req: Request) {
     );
 
     // Flush spans to Langfuse before the serverless function can exit.
-    // Without this, OTEL's batch timer may not fire before the Lambda is recycled.
-    await observability.shutdown?.();
+    // flush() sends pending spans and keeps the exporter alive for subsequent requests.
+    // shutdown() would terminate the exporter — subsequent requests would lose traces.
+    await langfuseExporter.flush();
 
     return Response.json({ text: result.text, threadId });
   } catch (err) {

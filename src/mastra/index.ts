@@ -18,23 +18,23 @@ const storage = new LibSQLStore({
 
 // LangfuseExporter sends spans over HTTPS to cloud.langfuse.com.
 // Unlike DefaultExporter (local DuckDB file), spans survive container teardown.
-// flush() must be awaited before the serverless function exits — see API route handler.
+// Call langfuseExporter.flush() (not shutdown()) at the end of each serverless
+// request — flush sends pending spans and keeps the exporter alive for the next
+// request; shutdown() terminates it and drops subsequent spans.
+export const langfuseExporter = new LangfuseExporter({
+  publicKey: process.env.LANGFUSE_PUBLIC_KEY!,
+  secretKey: process.env.LANGFUSE_SECRET_KEY!,
+  baseUrl: process.env.LANGFUSE_BASE_URL,
+});
+
 const observability = new Observability({
   configs: {
     default: {
       serviceName: 'portfolio-agent',
-      exporters: [
-        new LangfuseExporter({
-          publicKey: process.env.LANGFUSE_PUBLIC_KEY!,
-          secretKey: process.env.LANGFUSE_SECRET_KEY!,
-          baseUrl: process.env.LANGFUSE_BASE_URL,
-        }),
-      ],
+      exporters: [langfuseExporter],
     },
   },
 });
-
-export { observability };
 
 export const mastra = new Mastra({
   agents: { portfolioAgent },
