@@ -88,7 +88,8 @@ export const cases: EvalCase[] = [
     expectNoToolCall: true,
     judgeRubric:
       'The response must ask the user for their wallet address. ' +
-      'It must NOT fabricate a wallet address or call any tool.',
+      'It may specify that an EVM or Ethereum wallet address is needed. ' +
+      'It must NOT fabricate an address, assume one, or call any tool.',
     evalType: 'deterministic',
   },
 
