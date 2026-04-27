@@ -26,6 +26,12 @@ export const getWalletTokens = createTool({
   }),
   execute: async (inputData) => {
     const { address } = inputData;
+
+    // Burn address — not a real wallet. Skip Zapper and return empty holdings.
+    if (address.toLowerCase() === '0x0000000000000000000000000000000000000000') {
+      return { address, holdings: [], source: 'mock' as const, fetchedAt: new Date().toISOString() };
+    }
+
     const live = await fetchZapperPortfolio(address);
 
     if (live) {

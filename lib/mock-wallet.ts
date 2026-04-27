@@ -12,6 +12,8 @@ export interface RawWalletData {
 }
 
 const MOCK_PORTFOLIOS: Record<string, RawHolding[]> = {
+  // Zero address has no holdings — used by the empty-wallet eval case.
+  '0x0000000000000000000000000000000000000000': [],
   default: [
     { symbol: 'ETH',  balance: 4.2,      usd: 13440,  chain: 'ethereum' },
     { symbol: 'USDC', balance: 5200,     usd: 5200,   chain: 'ethereum' },
