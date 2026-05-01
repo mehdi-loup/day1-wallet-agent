@@ -131,3 +131,167 @@ If you mix them up: write a step as `execute: async (inputData)` and `inputData`
 
 - The workflow's `summarise` step calls `generateObject` directly (raw AI SDK inside a Mastra step). Day 6 will add observability — check whether that raw call appears in traces or needs explicit instrumentation.
 - `lastMessages: 20` is an arbitrary cap. Before adding eval pressure in Day 6, decide if 20 is right for the golden test set (long conversations may need more context to answer correctly).
+
+---
+
+# Day 10 Learning Log — MCP Migration: Wiring Day 9 into Mastra
+
+## What changed
+
+`lib/zapper.ts` is deleted. All Zapper calls now route through the Day 9 MCP server
+(`../day9-zapper-mcp/`) via Mastra's `MCPClient`. The wallet agent itself no longer
+makes Zapper API calls — it spawns a child process that does.
+
+Four callsites migrated:
+1. `src/mastra/tools/wallet.ts` → deleted (replaced by MCP tools in agent definition)
+2. `lib/tools/wallet.ts` → deleted (replaced by MCP tools spread into streamText)
+3. `app/api/portfolio-summary/route.ts` → direct MCP tool call
+4. `src/mastra/workflows/portfolio-workflow.ts` → MCP tool call in fetchTokensStep
+
+---
+
+## Self-evaluation
+
+### Q1 — The decoupling test: did MCP actually decouple, or did it just add a hop?
+
+**My answer:** Mostly yes, with one asterisk.
+
+**Yes:** I can swap the Day 9 server for any other MCP server exposing the same three tool
+names without touching this repo. The agent code has zero knowledge of GraphQL, Zapper
+endpoints, or chain IDs. The "abstraction" boundary is real — the agent describes what it
+needs (portfolio data for an address), not how to get it.
+
+**The asterisk:** `ZAPPER_API_KEY` still lives in this repo's `.env.local`. The key is passed
+to the child process, not used directly — but if you want to point at a different data
+source, you still need to touch both repos' env files. True decoupling would require the
+MCP server to handle its own secrets entirely (Streamable HTTP + Bearer token flow). That's
+deferred; the stdio transport inherits the parent's env by design.
+
+**Concrete evidence:** `git grep ZAPPER_API_KEY` in this repo now returns only `src/mastra/mcp.ts`
+(one line) and `.env.example`. In the old codebase it also appeared in `lib/zapper.ts`,
+`lib/tools/wallet.ts`, and `src/mastra/tools/wallet.ts`. That's the decoupling, in diff form.
+
+---
+
+### Q2 — Tool selection: why expose all three tools, and what happens if Day 9 adds a fourth?
+
+**Why all three:** The model picks the right granularity when given the right options.
+`get_portfolio` for full breakdowns, `get_token_balances` for "does it hold USDC?",
+`get_app_positions` for "any Aave debt?". Collapsing to one tool forces the model to
+receive DeFi position data on token-only questions — wasted context (the full portfolio
+JSON for vitalik.eth is ~6KB of tokens). Separate tools = precise schemas = no filtering.
+
+**Cost of an unused exposed tool:** ~80–120 tokens of tool definition injected into the
+system prompt context, plus model-side decision overhead ("should I use this?"). At three
+tools this cost is negligible. At 20 tools, it starts to matter — the model spends more
+cycles on tool selection and occasionally picks the wrong one from the noise.
+
+**If Day 9 adds a fourth tool tomorrow:** The agent does NOT pick it up automatically.
+`await zapperMCP.listTools()` is called at module evaluation time and cached. The new tool
+appears only after the Next.js server restarts. This is the static-vs-dynamic tradeoff:
+`listTools()` for static definitions, `listToolsets()` per-request for dynamic ones.
+
+---
+
+### Q3 — Failure modes: map each to user-facing behavior
+
+| Case | Server behavior | Transport | Agent UX | Gap |
+|------|----------------|-----------|----------|-----|
+| Bad/missing `ZAPPER_API_KEY` | Exits at boot | `listTools()` returns `{}` | No Zapper tools. Model says "I can't fetch wallet data." | Silent degradation — user doesn't know WHY |
+| Zapper 401/429/5xx | `isError: true` + message | Result propagates as-is | Model surfaces error verbatim: "Zapper GraphQL error: Unauthorized" | None — clean error path |
+| MCP server process killed | Transport closes | Mastra reconnects + retries | Tool call succeeds after brief delay; user sees nothing | None — transparent recovery |
+
+**Worst UX gap:** Case 1 (bad key at boot). The agent degrades silently — it starts, accepts
+user queries, but has no portfolio tools. The model eventually says it can't help, but gives
+no diagnostic. The fix: check `Object.keys(mcpTools).length` at boot and log/throw if zero.
+Not implemented today; documented as a production concern.
+
+---
+
+### Q4 — Process lifecycle in dev vs prod
+
+**Dev (Next.js hot reload):**
+- Module evaluation: lazy — triggered on first request that imports `portfolio-agent.ts`
+- `zapperMCP.listTools()` spawns the child process on first call
+- Hot reload re-evaluates the module; old MCPClient loses its subprocess reference
+- Old subprocess: orphaned (no SIGKILL from GC). It exits when its stdio streams close,
+  which happens when the Next.js process eventually reclaims them
+- Multiple reloads → multiple orphaned processes visible in `ps aux` during a long session
+- Harmless in practice; inconvenient to diagnose if you're wondering why Zapper responses
+  seem stale (you're actually talking to two different server instances for a moment)
+
+**Prod (single Node.js process, no hot reload):**
+- Module evaluates once at first request
+- One child process lives for the lifetime of the server
+- Reconnection on death: Mastra auto-respawns (verified in Case 3 of the failure tour)
+- The lifecycle problem disappears entirely
+
+---
+
+### Q5 — Did Mastra's MCPClient surface Resources and Prompts?
+
+**Short answer:** Resources and Prompts are accessible but require explicit calls —
+they are NOT automatically injected into the agent's context the way tools are.
+
+**What actually happened:** `listTools()` returned the three tools correctly and they work.
+The Resource (`zapper://supported-networks`) and Prompt (`analyze-wallet`) are available
+via `zapperMCP.resources.read(...)` and `zapperMCP.prompts.get(...)` respectively, but
+neither is wired through to the agent today.
+
+**What the agent loses:**
+- `supported-networks` Resource: the model doesn't know which networks are valid for
+  the `networks?` filter parameter. It might pass "mainnet" instead of "ethereum" and get
+  no results. Day 9 designed this as ambient context the host injects — but the host
+  (this agent) doesn't inject it. Production fix: call `zapperMCP.resources.read(...)` at
+  boot and inject the result into the agent's system prompt or as a static tool description.
+- `analyze-wallet` Prompt: ignored. The agent's own system prompt covers this functionality.
+  No loss in practice.
+
+---
+
+## What MCP actually bought me
+
+More than I expected on decoupling; less than the spec implies on Resources.
+
+**What it bought:** The agent genuinely has zero Zapper knowledge. The deletion of
+`lib/zapper.ts` is clean — no `// TODO: still references Zapper` comments. If Zapper
+changes their GraphQL schema tomorrow, I update one repo. If I want to swap in a
+portals.fi data source, I write a new MCP server and change one string in `src/mastra/mcp.ts`.
+That's real decoupling.
+
+**What it didn't buy (as much as I expected):** The "server defines the tool surface once"
+promise. The server does define the tools, but the agent still has to know the tool names
+to write a sensible system prompt. `zapper-mcp_get_portfolio` is a namespaced identifier,
+not a semantic capability — the agent's prompt still hardcodes it. A tool-agnostic agent
+would need to dynamically discover tool names and compose its own instructions. That's
+possible but expensive.
+
+**The honest summary:** MCP bought a clean capability boundary and error propagation. It
+didn't magically make the system self-describing or fully decoupled from names.
+
+---
+
+## Failure-mode tour results (Day 10 boundary)
+
+| Case | What triggered it | What the MCP transport did | What the agent/user sees |
+|------|------------------|---------------------------|--------------------------|
+| Bad key at boot | Empty `ZAPPER_API_KEY` | Server exits; MCPClient swallows error, returns `{}` from `listTools()` | Agent starts with no Zapper tools; model can't fetch portfolio |
+| Upstream error mid-call | Invalid API key (server boots, Zapper rejects call) | `isError: true` propagates cleanly as tool result | Model surfaces "Zapper GraphQL error: Unauthorized" to user |
+| Transport death | `kill <pid>` on server process | Mastra auto-reconnects, retries once, succeeds | User sees no error; call completes with brief latency spike |
+
+---
+
+## Open threads deferred to later days
+
+- **Streamable HTTP transport** between agent and MCP server — enables per-request auth,
+  multi-tenant API keys, eliminates hot-reload process lifecycle problem
+- **Resources injection** — `zapper://supported-networks` should be injected into the system
+  prompt at boot so the model knows valid network names
+- **Boot-time health check** — check `Object.keys(await zapperMCP.listTools()).length > 0`
+  at startup; throw or alert if zero (prevents silent degradation on bad key)
+- **Evals update** — eval suite (`evals/cases.ts`) still references tool name `getWalletTokens`.
+  After Day 10 migration, deterministic assertions about tool-call presence need to be
+  updated to match `zapper-mcp_get_token_balances` etc.
+- **RAG candidate** (Day 11 hypothesis): the model needs token metadata Zapper doesn't index
+  (protocol descriptions, risk documentation, governance context). That's a RAG candidate,
+  not an MCP candidate — static corpus embedding, not live API data.

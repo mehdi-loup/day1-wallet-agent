@@ -1,12 +1,72 @@
-# Wallet Agent — Days 1–6
+# Wallet Agent — Days 1–10
 
 Streaming crypto portfolio assistant built across a 21-day AI engineering sprint. Uses Vercel AI SDK + Mastra for agent orchestration, with full observability and an eval suite.
+
+## Architecture (Day 10+)
+
+```
+browser (useChat)
+  └→ /api/chat (streamText + MCP tools)
+        └→ src/mastra/mcp.ts (MCPClient singleton)
+              └→ node ../day9-zapper-mcp/build/server.js (child process, stdio)
+                    └→ Zapper GraphQL API
+
+/api/agent (Mastra portfolioAgent.generate())
+  └→ portfolioAgent tools (getTokenPrice + MCP tools)
+        └→ src/mastra/mcp.ts (same singleton)
+              └→ node ../day9-zapper-mcp/build/server.js (same child process)
+                    └→ Zapper GraphQL API
+```
+
+**Why MCP here:** `lib/zapper.ts` was deleted on Day 10 (the "deletion test"). The agent now
+gets all Zapper data exclusively through the [day9-zapper-mcp](../day9-zapper-mcp/) server.
+This decouples capability from orchestration: if the Zapper API changes, only the MCP server
+updates — not this repo.
+
+**Three tools, not one:** The Day 9 server exposes `get_portfolio`, `get_token_balances`, and
+`get_app_positions` separately. All three are wired through to the model so it can pick the
+right granularity: full portfolio for "what's in this wallet?", token balances for "does it hold
+USDC on Base?", app positions for "any Aave debt?". A single `get_portfolio` tool would work
+for 90% of cases but forces the model to receive and mentally discard DeFi position data on
+token-only questions — ~200 tokens of unnecessary context per call.
+
+**ZAPPER_API_KEY placement:** The key lives in this repo's `.env.local` but is only ever used
+to configure the child process (`env: { ZAPPER_API_KEY }` in `src/mastra/mcp.ts`). After
+Day 10, no code in this repo calls the Zapper API directly. The child process holds the key
+and is the only caller.
+
+**Stdio process lifecycle in dev:**
+- The child process spawns on the first `zapperMCP.listTools()` call (lazy).
+- `src/mastra/mcp.ts` is a module-level singleton — one process per Next.js server lifetime.
+- In dev mode: hot reloads re-evaluate the module, orphaning the old child process.
+  Multiple hot reloads → multiple orphaned processes (harmless — they exit when stdio closes).
+- In production (single process, no hot reload): this is a non-issue.
+- **Reconnection:** If the child process dies mid-session, Mastra auto-respawns it and retries
+  the failed tool call once. The user sees no error.
+
+**Day 9 server prerequisite:** The agent depends on `../day9-zapper-mcp/build/server.js`
+being pre-built. If you edit the Day 9 server source and forget to rebuild (`pnpm build` in
+`day9-zapper-mcp/`), the agent will spawn a stale binary silently. The failure mode: server
+runs but returns old behavior. No build-time check enforces freshness.
+
+### Failure modes at the agent boundary
+
+| Failure | Server behavior | Agent/user sees |
+|---------|----------------|-----------------|
+| Bad/missing `ZAPPER_API_KEY` | Server exits at boot (`Fatal: ...`) | `listTools()` returns `{}` — agent starts with no Zapper tools; model tells user it cannot fetch portfolio data |
+| Zapper API error (401, 429, 5xx) | `isError: true` + error message | Error message propagates to model verbatim; model surfaces it to user ("Zapper API returned Unauthorized") |
+| MCP server process killed mid-session | Transport closes | Mastra auto-reconnects + retries once; user sees no error (transparent recovery) |
+
+---
 
 ## Setup
 
 ```bash
+# 1. Pre-build the Day 9 MCP server (required before the agent can start)
+cd ../day9-zapper-mcp && pnpm build && cd -
+
 cp .env.example .env.local
-# fill in your ANTHROPIC_API_KEY (and optionally ZAPPER_API_KEY)
+# fill in your ANTHROPIC_API_KEY and ZAPPER_API_KEY
 pnpm install
 pnpm dev          # Next.js UI on localhost:3000
 pnpm mastra:dev   # Mastra Studio on localhost:4111
@@ -15,10 +75,10 @@ pnpm eval         # run the golden eval suite
 
 ## Keys needed
 
-| Variable | Where to get it |
-|---|---|
-| `ANTHROPIC_API_KEY` | console.anthropic.com |
-| `ZAPPER_API_KEY` | zapper.xyz (optional — falls back to mock data) |
+| Variable | Where to get it | Used by |
+|---|---|---|
+| `ANTHROPIC_API_KEY` | console.anthropic.com | Agent model calls |
+| `ZAPPER_API_KEY` | zapper.xyz | Forwarded to Day 9 MCP server child process |
 
 ## What's built
 
@@ -26,10 +86,11 @@ pnpm eval         # run the golden eval suite
 |---|---|
 | 1 | Streaming chat with `useChat` + `streamText` |
 | 2 | `generateObject` + Zod structured portfolio summary |
-| 3 | Tool calling — `getTokenPrice` (CoinGecko) + `getWalletTokens` (Zapper) |
+| 3 | Tool calling — `getTokenPrice` (CoinGecko) + `getWalletTokens` (Zapper direct) |
 | 4 | Composed `stopWhen`, streaming tool-call UI, abort button |
 | 5 | Mastra layer — `Agent`, `Workflow`, `Memory` (LibSQL) |
 | 6 | Observability (DuckDB traces → Studio) + 10-case eval suite |
+| 10 | MCP migration — `lib/zapper.ts` deleted; all Zapper data via [day9-zapper-mcp](../day9-zapper-mcp/) |
 
 ---
 
