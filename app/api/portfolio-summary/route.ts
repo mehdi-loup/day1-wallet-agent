@@ -5,7 +5,7 @@ import { anthropic } from '@ai-sdk/anthropic';
 import { z } from 'zod';
 import { PortfolioSummarySchema } from '@/lib/schemas/portfolio';
 import { getMockWalletData } from '@/lib/mock-wallet';
-import { fetchZapperPortfolio } from '@/lib/zapper';
+import { zapperMCP } from '@/src/mastra/mcp';
 
 const RequestSchema = z.object({
   walletAddress: z
@@ -14,6 +14,25 @@ const RequestSchema = z.object({
       message: 'Must be a valid 0x-prefixed Ethereum address (42 chars)',
     }),
 });
+
+// Shape returned by the Day 9 server's get_token_balances tool.
+// The MCP execute returns { content: [{type:'text', text: jsonString}], isError? }
+// unless the server returned structuredContent, which this server does not.
+type MCPCallResult = {
+  content?: Array<{ type: string; text?: string }>;
+  isError?: boolean;
+};
+
+type TokenBalance = {
+  symbol: string;
+  balance: number;
+  balanceUSD: number;
+};
+
+type TokenBalancesResult = {
+  totalUSD: number;
+  tokens: TokenBalance[];
+};
 
 export async function POST(req: Request) {
   const body = await req.json();
@@ -28,11 +47,35 @@ export async function POST(req: Request) {
 
   const { walletAddress } = parsed.data;
 
-  const live = await fetchZapperPortfolio(walletAddress);
-  const holdings = live
-    ? live.holdings.map((h) => `- ${h.symbol}: ${h.balance} tokens = $${h.balanceUSD ?? 0} USD`)
-    : getMockWalletData(walletAddress).holdings.map((h) => `- ${h.symbol}: ${h.balance} tokens = $${h.usd} USD (chain: ${h.chain})`);
-  const fetchedAt = live?.fetchedAt ?? new Date().toISOString();
+  // Fetch token balances via MCP — same data as before, but routed through
+  // the Day 9 server. The agent no longer calls Zapper directly.
+  const tools = await zapperMCP.listTools();
+  const tokenBalancesTool = tools['zapper-mcp_get_token_balances'];
+
+  let holdings: string[];
+  let fetchedAt: string;
+
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const raw = (await tokenBalancesTool.execute?.({ address: walletAddress }, {} as any)) as MCPCallResult;
+
+    if (raw?.isError || !raw?.content?.[0]?.text) {
+      throw new Error(raw?.content?.[0]?.text ?? 'MCP tool returned no data');
+    }
+
+    const result = JSON.parse(raw.content[0].text) as TokenBalancesResult;
+    holdings = result.tokens.map(
+      (t) => `- ${t.symbol}: ${t.balance} tokens = $${t.balanceUSD} USD`,
+    );
+    fetchedAt = new Date().toISOString();
+  } catch {
+    // Fallback to mock if MCP call fails (server not running, bad key, etc.)
+    const data = getMockWalletData(walletAddress);
+    holdings = data.holdings.map(
+      (h) => `- ${h.symbol}: ${h.balance} tokens = $${h.usd} USD (chain: ${h.chain})`,
+    );
+    fetchedAt = new Date().toISOString();
+  }
 
   try {
     const { object } = await generateObject({

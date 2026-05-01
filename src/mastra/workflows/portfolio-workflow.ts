@@ -5,7 +5,7 @@ import { createAnthropic } from '@ai-sdk/anthropic';
 const anthropicProvider = createAnthropic({ baseURL: 'https://api.anthropic.com/v1' });
 import { z } from 'zod';
 import { getMockWalletData } from '../../../lib/mock-wallet';
-import { fetchZapperPortfolio } from '../../../lib/zapper';
+import { zapperMCP } from '../mcp';
 import { PortfolioSummarySchema } from '../../../lib/schemas/portfolio';
 
 // Delta vs raw AI SDK:
@@ -63,23 +63,47 @@ const fetchTokensStep = createStep({
   outputSchema: holdingsSchema,
   execute: async ({ inputData }) => {
     const { address } = inputData;
-    const live = await fetchZapperPortfolio(address);
 
-    if (live) {
-      return { address, ...live };
+    try {
+      const tools = await zapperMCP.listTools();
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const raw = (await tools['zapper-mcp_get_token_balances'].execute?.({ address }, {} as any)) as {
+        content?: Array<{ type: string; text?: string }>;
+        isError?: boolean;
+      };
+
+      if (raw?.isError || !raw?.content?.[0]?.text) {
+        throw new Error(raw?.content?.[0]?.text ?? 'MCP returned no data');
+      }
+
+      const result = JSON.parse(raw.content[0].text) as {
+        totalUSD: number;
+        tokens: Array<{ symbol: string; balance: number; balanceUSD: number }>;
+      };
+
+      return {
+        address,
+        holdings: result.tokens.map((t) => ({
+          symbol: t.symbol,
+          balance: t.balance,
+          balanceUSD: t.balanceUSD,
+        })),
+        source: 'zapper' as const,
+        fetchedAt: new Date().toISOString(),
+      };
+    } catch {
+      const data = getMockWalletData(address);
+      return {
+        address: data.address,
+        holdings: data.holdings.map((h) => ({
+          symbol: h.symbol,
+          balance: h.balance,
+          balanceUSD: h.usd,
+        })),
+        source: 'mock' as const,
+        fetchedAt: data.fetchedAt,
+      };
     }
-
-    const data = getMockWalletData(address);
-    return {
-      address: data.address,
-      holdings: data.holdings.map((h) => ({
-        symbol: h.symbol,
-        balance: h.balance,
-        balanceUSD: h.usd,
-      })),
-      source: 'mock' as const,
-      fetchedAt: data.fetchedAt,
-    };
   },
 });
 

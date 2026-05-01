@@ -1,7 +1,7 @@
 import { streamText, UIMessage, convertToModelMessages, stepCountIs } from 'ai';
 import { anthropic } from '@ai-sdk/anthropic';
 import { getTokenPrice } from '@/lib/tools/price';
-import { getWalletTokens } from '@/lib/tools/wallet';
+import { zapperMCP } from '@/src/mastra/mcp';
 
 /*
  * TOOL CALLING — written by me after Day 3
@@ -19,11 +19,21 @@ import { getWalletTokens } from '@/lib/tools/wallet';
  *
  * One production failure mode: prompt injection — a malicious wallet token name
  * could instruct the model to call tools with attacker-chosen arguments.
+ *
+ * Day 10 delta: getWalletTokens (direct Zapper call) replaced by three MCP-backed
+ * tools from the Day 9 server. The model picks the right granularity per query.
+ * Lifecycle note: zapperMCP is a module-level singleton; listTools() reuses the
+ * same child process across requests. In Next.js dev mode, hot reloads orphan the
+ * old child process — harmless but worth knowing (see src/mastra/mcp.ts).
  */
 
-const SYSTEM_PROMPT = `You are a crypto portfolio assistant. You have two tools:
-- getWalletTokens: call this when the user provides a wallet address. Returns holdings with balanceUSD per token already included — do NOT follow up with getTokenPrice calls to value the portfolio.
-- getTokenPrice: call this only for standalone price queries (e.g. "what's ETH at right now?").
+const SYSTEM_PROMPT = `You are a DeFi portfolio analyst with access to real-time Zapper data.
+
+For wallet queries, choose the right tool based on the question:
+- zapper-mcp_get_portfolio: full breakdown (tokens + DeFi positions + total USD). Default for "what's in this wallet?".
+- zapper-mcp_get_token_balances: spot token holdings only. Use for "does this wallet hold X?" or chain-specific token questions.
+- zapper-mcp_get_app_positions: DeFi protocol positions only (Aave debt, Uniswap LP, staking). Use for leverage, yield, or protocol questions.
+- getTokenPrice: standalone price queries only (e.g. "what's ETH at?"). Do NOT call after a portfolio query — balanceUSD is already included.
 
 Be concise and precise — your users are technical.`;
 
@@ -31,17 +41,18 @@ export async function POST(req: Request) {
   try {
     const { messages }: { messages: UIMessage[] } = await req.json();
 
+    // Fetch MCP tools once per request — the MCPClient singleton reuses the
+    // underlying child process, so this is a cheap in-memory lookup after boot.
+    const mcpTools = await zapperMCP.listTools();
+
     const result = streamText({
       model: anthropic('claude-haiku-4-5-20251001'),
       system: SYSTEM_PROMPT,
       messages: await convertToModelMessages(messages),
-      tools: { getTokenPrice, getWalletTokens },
+      tools: { getTokenPrice, ...mcpTools },
       // OR semantics: any one condition firing stops the loop.
-      // stepCountIs(6): hard ceiling — 6 gives room for getWalletTokens + a few
-      //   price lookups + final synthesis without letting a confused model burn budget.
-      // Custom predicate: guards the specific runaway where the model calls getTokenPrice
-      //   repeatedly in a loop (e.g. re-fetching ETH on every step). 5 price calls in
-      //   one turn is a symptom of a broken reasoning loop, not a valid user flow.
+      // stepCountIs(6): hard ceiling — 6 gives room for a portfolio query + a few
+      //   follow-up tool calls + final synthesis without letting a confused model burn budget.
       stopWhen: [
         stepCountIs(6),
         ({ steps }) => {
@@ -51,10 +62,6 @@ export async function POST(req: Request) {
           return priceCalls >= 5;
         },
       ],
-      // onStepFinish fires after each LLM call completes — this is the foundation
-      // for Day 14's observability work (LangSmith / Langfuse). The structure here
-      // maps directly to what those tools expect: step index, tool activity, finish
-      // reason, and token usage per step.
       onStepFinish({ stepNumber, toolCalls, finishReason, usage }) {
         console.log(
           JSON.stringify({

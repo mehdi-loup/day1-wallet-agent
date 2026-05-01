@@ -2,7 +2,7 @@ import { Agent } from '@mastra/core/agent';
 import { Memory } from '@mastra/memory';
 import { createAnthropic } from '@ai-sdk/anthropic';
 import { getTokenPrice } from '../tools/price';
-import { getWalletTokens } from '../tools/wallet';
+import { zapperMCP } from '../mcp';
 
 // Delta vs raw AI SDK:
 //   - Agent IS the config — registered once on the Mastra instance, reused across requests.
@@ -11,23 +11,37 @@ import { getWalletTokens } from '../tools/wallet';
 //     ANTHROPIC_BASE_URL env var set without the required /v1 suffix.
 //   - memory: new Memory() removes the need to manually pass messages[] on each call.
 //     Pass threadId + resourceId and Mastra fetches/stores history automatically.
+//
+// Day 10 delta: Zapper tools now come from the Day 9 MCP server via MCPClient.listTools().
+//   Tool names are namespaced: zapper-mcp_get_portfolio, zapper-mcp_get_token_balances,
+//   zapper-mcp_get_app_positions. The agent no longer holds ZAPPER_API_KEY or calls
+//   the Zapper API directly — all Zapper calls go through the child process.
 
 const anthropicProvider = createAnthropic({
   baseURL: 'https://api.anthropic.com/v1',
 });
 
+// Top-level await: the MCPClient connects lazily on first listTools() call.
+// This module is async from the perspective of any importer — Next.js App Router
+// and Mastra's bundler both support this in server-side module scope.
+const mcpTools = await zapperMCP.listTools();
+
 export const portfolioAgent = new Agent({
   id: 'portfolio-agent',
   name: 'Crypto Portfolio Agent',
-  instructions: `You are a crypto portfolio assistant. You have two tools:
-- getWalletTokens: call this when the user provides a wallet address. Returns holdings with balanceUSD per token — do NOT follow up with getTokenPrice calls to value the portfolio.
-- getTokenPrice: call this only for standalone price queries (e.g. "what's ETH at right now?").
+  instructions: `You are a DeFi portfolio analyst with access to real-time Zapper data.
+
+For wallet queries, choose the right tool based on the question:
+- zapper-mcp_get_portfolio: full breakdown (tokens + DeFi positions + total USD). Use when the user wants a complete picture.
+- zapper-mcp_get_token_balances: spot token holdings only. Use for "does this wallet hold X?" or token-specific questions.
+- zapper-mcp_get_app_positions: DeFi protocol positions only (Aave, Uniswap LP, staking). Use for leverage, yield, or protocol-specific questions.
+- getTokenPrice: standalone price queries only (e.g. "what's ETH at right now?"). Do NOT call this after a portfolio query — balanceUSD is already included.
 
 Be concise and precise — your users are technical.
 
-Important: you have memory across turns. If the user already told you their wallet address in a previous message, use it — don't ask again.`,
+You have memory across turns. If the user already provided a wallet address, use it without asking again.`,
   model: anthropicProvider('claude-haiku-4-5-20251001'),
-  tools: { getTokenPrice, getWalletTokens },
+  tools: { getTokenPrice, ...mcpTools },
   memory: new Memory({
     options: { lastMessages: 20 },
   }),
