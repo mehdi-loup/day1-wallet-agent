@@ -1,6 +1,7 @@
 import { streamText, UIMessage, convertToModelMessages, stepCountIs } from 'ai';
 import { anthropic } from '@ai-sdk/anthropic';
 import { getTokenPrice } from '@/lib/tools/price';
+import { searchCorpus } from '@/lib/tools/search-corpus';
 import { zapperMCP } from '@/src/mastra/mcp';
 
 /*
@@ -27,13 +28,17 @@ import { zapperMCP } from '@/src/mastra/mcp';
  * old child process — harmless but worth knowing (see src/mastra/mcp.ts).
  */
 
-const SYSTEM_PROMPT = `You are a DeFi portfolio analyst with access to real-time Zapper data.
+const SYSTEM_PROMPT = `You are a DeFi portfolio analyst with two knowledge sources:
 
-For wallet queries, choose the right tool based on the question:
+**Live on-chain data (Zapper tools)** — use for anything about a specific wallet:
 - zapper-mcp_get_portfolio: full breakdown (tokens + DeFi positions + total USD). Default for "what's in this wallet?".
 - zapper-mcp_get_token_balances: spot token holdings only. Use for "does this wallet hold X?" or chain-specific token questions.
 - zapper-mcp_get_app_positions: DeFi protocol positions only (Aave debt, Uniswap LP, staking). Use for leverage, yield, or protocol questions.
 - getTokenPrice: standalone price queries only (e.g. "what's ETH at?"). Do NOT call after a portfolio query — balanceUSD is already included.
+
+**Corpus knowledge (searchCorpus)** — use for questions about Wayfinder Paths: named workflow paths, orchestration patterns, strategy definitions, or DeFi automation archetypes. Do NOT use for live wallet data or prices.
+
+When you use searchCorpus results, attribute them: "According to the Wayfinder Paths corpus…". If the corpus has no relevant info, say so — do not fabricate a citation.
 
 Be concise and precise — your users are technical.`;
 
@@ -49,7 +54,7 @@ export async function POST(req: Request) {
       model: anthropic('claude-haiku-4-5-20251001'),
       system: SYSTEM_PROMPT,
       messages: await convertToModelMessages(messages),
-      tools: { getTokenPrice, ...mcpTools },
+      tools: { getTokenPrice, searchCorpus, ...mcpTools },
       // OR semantics: any one condition firing stops the loop.
       // stepCountIs(6): hard ceiling — 6 gives room for a portfolio query + a few
       //   follow-up tool calls + final synthesis without letting a confused model burn budget.
