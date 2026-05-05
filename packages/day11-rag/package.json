@@ -1,0 +1,17 @@
+{
+  "name": "day11-rag",
+  "version": "0.1.0",
+  "type": "module",
+  "main": "./src/search.ts",
+  "exports": {
+    ".": "./src/search.ts"
+  },
+  "dependencies": {
+    "@supabase/supabase-js": "^2.47.0",
+    "ws": "^8.20.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "@types/ws": "^8.18.1"
+  }
+}

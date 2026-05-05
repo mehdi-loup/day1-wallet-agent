@@ -2,6 +2,7 @@
   "name": "day1-wallet-agent",
   "version": "0.1.0",
   "private": true,
+  "type": "module",
   "scripts": {
     "dev": "next dev",
     "mastra:dev": "mastra dev",
@@ -24,6 +25,7 @@
     "@mastra/observability": "^1.10.0",
     "@privy-io/react-auth": "^3.22.1",
     "ai": "^6.0.168",
+    "day11-rag": "workspace:*",
     "mastra": "^1.6.3",
     "next": "16.2.4",
     "react": "19.2.4",

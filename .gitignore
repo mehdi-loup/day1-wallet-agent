@@ -50,3 +50,4 @@ src/mastra/public/
 mastra.db-shm
 mastra.db-wal
 .mastra/
+.env*.local
