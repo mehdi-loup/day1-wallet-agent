@@ -21,11 +21,13 @@ if (fs.existsSync(envPath)) {
   }
 }
 
-// Dynamic import ensures env vars are set before portfolio-agent.ts evaluates.
-const { generateObject } = await import('ai');
+// Dynamic import ensures env vars are set before mcp.ts evaluates.
+const { generateText, generateObject, stepCountIs } = await import('ai');
 const { createAnthropic } = await import('@ai-sdk/anthropic');
 const { z } = await import('zod');
-const { evalMastra } = await import('./eval-mastra.js');
+const { getTokenPrice } = await import('../lib/tools/price.js');
+const { searchCorpus } = await import('../lib/tools/search-corpus.js');
+const { zapperMCP } = await import('../src/mastra/mcp.js');
 
 const anthropicProvider = createAnthropic({ baseURL: 'https://api.anthropic.com/v1' });
 const judgeModel = anthropicProvider('claude-haiku-4-5-20251001');
@@ -119,8 +121,22 @@ const RAG_CASES: RagCase[] = [
 
 type Result = { id: string; category: string; passed: boolean; tools: string[]; detail: string };
 
+const SYSTEM_PROMPT = `You are a DeFi portfolio analyst with two knowledge sources:
+
+**Live on-chain data (Zapper tools)** — use for anything about a specific wallet:
+- zapper-mcp_get_portfolio: full breakdown (tokens + DeFi positions + total USD). Default for "what's in this wallet?".
+- zapper-mcp_get_token_balances: spot token holdings only. Use for "does this wallet hold X?" or chain-specific token questions.
+- zapper-mcp_get_app_positions: DeFi protocol positions only (Aave debt, Uniswap LP, staking). Use for leverage, yield, or protocol questions.
+- getTokenPrice: standalone price queries only (e.g. "what's ETH at?"). Do NOT call after a portfolio query — balanceUSD is already included.
+
+**Corpus knowledge (searchCorpus)** — use for questions about Wayfinder Paths: named workflow paths, orchestration patterns, strategy definitions, or DeFi automation archetypes. Do NOT use for live wallet data or prices.
+
+When you use searchCorpus results, attribute them: "According to the Wayfinder Paths corpus…". If the corpus has no relevant info, say so — do not fabricate a citation.
+
+Be concise and precise — your users are technical.`;
+
 async function main() {
-  const agent = evalMastra.getAgent('portfolioAgent');
+  const mcpTools = await zapperMCP.listTools();
   const results: Result[] = [];
   let idx = 0;
 
@@ -131,9 +147,13 @@ async function main() {
     process.stdout.write(`  [${idx}/6] ${c.id} ... `);
 
     try {
-      const result = await agent.generate(
-        [{ role: 'user', content: c.input }],
-      );
+      const result = await generateText({
+        model: anthropicProvider('claude-haiku-4-5-20251001'),
+        system: SYSTEM_PROMPT,
+        messages: [{ role: 'user', content: c.input }],
+        tools: { getTokenPrice, searchCorpus, ...mcpTools },
+        stopWhen: [stepCountIs(6)],
+      });
       const tools = extractToolNames(result.steps ?? []);
 
       if (c.expectedToolCall && !tools.includes(c.expectedToolCall)) {
