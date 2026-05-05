@@ -1,6 +1,6 @@
-import { embedOne } from './embed.js'
-import { search as dbSearch } from './db.js'
-import type { SearchResult } from './types.js'
+import { embedOne } from './embed.ts'
+import { search as dbSearch } from './db.ts'
+import type { SearchResult } from './types.ts'
 
 // search() returns raw chunks — may include multiple chunks from the same document.
 // Use searchDeduped() to get one result per path (max-pooling by slug).
