@@ -133,7 +133,6 @@ async function main() {
     try {
       const result = await agent.generate(
         [{ role: 'user', content: c.input }],
-        { threadId: `eval-rag-${c.id}`, resourceId: 'eval-runner' },
       );
       const tools = extractToolNames(result.steps ?? []);
 
