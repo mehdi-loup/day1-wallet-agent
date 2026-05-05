@@ -1,6 +1,6 @@
 import { createClient } from '@supabase/supabase-js'
 import ws from 'ws'
-import type { WfPathYaml, ChunkWithEmbedding, SearchResult } from './types.ts'
+import type { WfPathYaml, ChunkWithEmbedding, SearchResult } from './types'
 
 function getClient() {
   const url = process.env.SUPABASE_URL
