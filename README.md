@@ -1,8 +1,8 @@
-# Wallet Agent — Days 1–10
+# Wallet Agent — Days 1–12
 
 Streaming crypto portfolio assistant built across a 21-day AI engineering sprint. Uses Vercel AI SDK + Mastra for agent orchestration, with full observability and an eval suite.
 
-## Architecture (Day 10+)
+## Architecture (Day 12+)
 
 ```
 browser (useChat)
@@ -12,11 +12,47 @@ browser (useChat)
                     └→ Zapper GraphQL API
 
 /api/agent (Mastra portfolioAgent.generate())
-  └→ portfolioAgent tools (getTokenPrice + MCP tools)
-        └→ src/mastra/mcp.ts (same singleton)
-              └→ node ../day9-zapper-mcp/build/server.js (same child process)
-                    └→ Zapper GraphQL API
+  └→ portfolioAgent tools:
+        ├─ getTokenPrice (CoinGecko)
+        ├─ searchCorpus (RAG — see below)
+        └─ MCP tools (getPortfolio, getTokenBalances, getAppPositions)
+              └→ src/mastra/mcp.ts
+                    └→ node ../day9-zapper-mcp/build/server.js
+                          └→ Zapper GraphQL API
 ```
+
+### Tool routing — two knowledge sources
+
+The agent has two categories of tools. The model decides which to call (agentic RAG — not pipeline RAG):
+
+| Tool category | What it's for | Should NOT be used for |
+|---|---|---|
+| **Zapper MCP tools** | Live on-chain data: token balances, DeFi positions, portfolio totals | Static knowledge, definitions, docs |
+| **`searchCorpus`** | Wayfinder Paths corpus: named workflow definitions, orchestration patterns, skill descriptions | Live wallet data, token prices, anything time-sensitive |
+| **`getTokenPrice`** | Standalone price lookup (CoinGecko) | Any non-price query |
+
+**Routing examples:**
+- "What is my wallet balance?" → Zapper MCP tools only
+- "What does the Conditional Router Reference path do?" → `searchCorpus` only
+- "What is the virtual-delta-neutral path and does my wallet hold stablecoins?" → `searchCorpus` AND Zapper MCP tools
+
+**Why agentic RAG and not pipeline RAG:** Pipeline RAG embeds every query and stuffs top-k chunks into every prompt, whether or not they're relevant. At k=5 that's ~750 extra tokens per request — wasted if the query is "what's my ETH balance?" The agent calling `searchCorpus` only when needed keeps the context window lean and prevents retrieved noise from degrading answers on non-corpus questions.
+
+### `searchCorpus` tool details
+
+- **Source:** `../day11-rag/` — installed as `"day11-rag": "file:../day11-rag"` in package.json
+- **Retrieval:** `searchDeduped(query, k=5)` — cosine similarity over Voyage AI embeddings in Supabase pgvector, deduped to one chunk per document
+- **Context budget:** 5 chunks × 600-char truncation ≈ 750 tokens of RAG context per call
+- **Attribution:** System prompt instructs the agent to prefix corpus-derived answers with "According to the Wayfinder Paths corpus…" — makes retrieval visible and hallucinated citations detectable
+
+### Failure modes at the RAG boundary
+
+| Failure | Tool behavior | Agent/user sees |
+|---|---|---|
+| Voyage API rate-limited (429) | Tool retries up to 6× with 62s waits | Long latency or timeout if all retries exhausted |
+| Supabase connection failure | Tool throws, Mastra passes error to agent | Agent says "I encountered a technical issue with the corpus search" |
+| Query returns 0 results (below `minSimilarity`) | Tool returns `{ results: [] }` | Agent says "I don't have information about that in the corpus" |
+| Wrong Mastra execute signature (`{ context }` instead of direct args) | TypeError on `context` being undefined — silent tool failure | Agent falls back to parametric knowledge without flagging the failure |
 
 **Why MCP here:** `lib/zapper.ts` was deleted on Day 10 (the "deletion test"). The agent now
 gets all Zapper data exclusively through the [day9-zapper-mcp](../day9-zapper-mcp/) server.
@@ -66,11 +102,12 @@ runs but returns old behavior. No build-time check enforces freshness.
 cd ../day9-zapper-mcp && pnpm build && cd -
 
 cp .env.example .env.local
-# fill in your ANTHROPIC_API_KEY and ZAPPER_API_KEY
+# fill in your ANTHROPIC_API_KEY, ZAPPER_API_KEY, VOYAGE_API_KEY, SUPABASE_*
 pnpm install
 pnpm dev          # Next.js UI on localhost:3000
 pnpm mastra:dev   # Mastra Studio on localhost:4111
-pnpm eval         # run the golden eval suite
+pnpm eval         # run the golden eval suite (10 original cases)
+pnpm tsx evals/run-rag.ts  # run the 6 RAG-specific eval cases
 ```
 
 ## Keys needed
@@ -79,6 +116,9 @@ pnpm eval         # run the golden eval suite
 |---|---|---|
 | `ANTHROPIC_API_KEY` | console.anthropic.com | Agent model calls |
 | `ZAPPER_API_KEY` | zapper.xyz | Forwarded to Day 9 MCP server child process |
+| `VOYAGE_API_KEY` | dash.voyageai.com | `searchCorpus` tool — embeds queries at search time |
+| `SUPABASE_URL` | supabase.com → project settings | `searchCorpus` tool — pgvector vector DB |
+| `SUPABASE_SERVICE_ROLE_KEY` | supabase.com → project settings → API | `searchCorpus` tool — service role bypasses RLS |
 
 ## What's built
 
@@ -91,6 +131,7 @@ pnpm eval         # run the golden eval suite
 | 5 | Mastra layer — `Agent`, `Workflow`, `Memory` (LibSQL) |
 | 6 | Observability (DuckDB traces → Studio) + 10-case eval suite |
 | 10 | MCP migration — `lib/zapper.ts` deleted; all Zapper data via [day9-zapper-mcp](../day9-zapper-mcp/) |
+| 12 | Agentic RAG — `searchCorpus` tool; Wayfinder Paths corpus via Supabase pgvector + Voyage AI; 6-case eval (3 grounded, 3 ungrounded, 6/6 passed) |
 
 ---
 

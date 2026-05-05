@@ -1,297 +1,195 @@
-# Day 6 Learning Log — Observability + Evals
+# Day 12 Learning Log — RAG as an Agent Tool
+
+## Checkpoint questions
+
+### 1. Day 11 eval baseline
+
+`recall@5 = 80%` on the 14-path corpus (100% on 4-path subset). Two misses: "risk gate agent" and "parallel spawning" — generic queries where competing document chunks outranked the correct target.
+
+**What this means today:** For 80% of corpus queries the agent gets accurate grounding material. The two miss categories return *some* chunks, but from the wrong path. Bad retrieval shown to the user is worse than no retrieval — so the system prompt instructs the agent to attribute answers to the corpus ("According to the Wayfinder Paths corpus…") rather than stating retrieved content as fact. Attribution makes the failure mode visible instead of invisible.
+
+---
+
+### 2. Import strategy: `file:` dependency
+
+Added `"day11-rag": "file:../day11-rag"` to day1-wallet-agent's package.json, and an `exports` field to day11-rag's package.json pointing to `./src/search.ts`.
+
+**Why `file:` and not direct relative import:** The package.json entry makes the dependency explicit — `pnpm ls` shows it, the lockfile tracks it, any engineer reading package.json understands the dep graph. A raw `import '../../day11-rag/src/search.js'` is invisible to tooling and fragile to directory moves.
+
+**Why not pnpm workspace:** Workspace requires a root-level `pnpm-workspace.yaml` and coordination between packages for versioning. Overkill for a single consumer of a co-located sibling package; `file:` gives the same boundary benefits with no infrastructure.
+
+**What breaks if day11-rag moves:** One line in package.json (`file:../new-path`). If its public interface (search.ts exports) changes, TypeScript catches it at compile time. If internal files change, consumers are isolated.
+
+**Post-session update — Vercel deploy fix:** `file:` deps break on Vercel because only the project root is deployed; the `../day11-rag` sibling doesn't exist in the build environment. Migrated to Option B: the 4 RAG source files (`types.ts`, `embed.ts`, `db.ts`, `search.ts`) are inlined into `src/lib/rag/`, and `@supabase/supabase-js` + `ws` added as direct dependencies. Import in `search-corpus.ts` changed from `'day11-rag'` to `'../../lib/rag/search.js'`. The module boundary is preserved at the function level; the package boundary was a local-dev convenience that doesn't survive deployment.
+
+---
+
+### 3. Tool description as routing mechanism
+
+The `searchCorpus` description explicitly names the domain (Wayfinder Paths corpus, AI agent orchestration workflows) and explicitly excludes the competing domain (live on-chain data, token prices, wallet balances).
+
+**Routing test:** Given the description and query "What is my wallet balance?" — the description says "Do NOT use for wallet balances." The model should not call it. Given "What does the conditional router policy do?" — the description says "questions about specific named paths, workflow archetypes." The model should call it.
+
+**What would still fool it:** A query like "What Wayfinder path manages my token balance?" — the phrase "token balance" would trigger the Zapper exclusion guard, but "Wayfinder path" is clearly in-corpus. The model should call corpus, but might route to Zapper first. A more explicit description: "Use ONLY for questions about Wayfinder Path definitions, not for questions about live wallet data even if they mention Wayfinder."
+
+---
+
+### 4. System prompt routing
+
+The agent has two tool categories:
+- **Zapper tools** — live on-chain data (token balances, portfolio, DeFi positions, token prices)
+- **searchCorpus** — Wayfinder Paths corpus (orchestration workflow definitions, skill descriptions, path archetypes)
+
+For a hybrid query like "What is the virtual-delta-neutral path and does my wallet hold any relevant tokens?":
+1. Agent calls `searchCorpus("virtual-delta-neutral")` to get the path definition
+2. Agent calls `zapper-mcp_get_token_balances` for the wallet
+3. Blends both in the response
+
+The system prompt doesn't prescribe a fixed order — it describes the two domains and says "let the question guide which tools you call and in what order." This allows the agent to compose freely within a turn.
+
+---
+
+### 5. Smoke-test and wire verification
+
+Live query "What does the Conditional Router Reference path do?" produced:
+- Tool call: `searchCorpus` with `query="Conditional Router Reference path"`, k=5
+- Hits: 5, latency: ~1190ms (dominated by Voyage AI embedding)
+- Agent response attributed to corpus, described as a policy-type path
+
+The `[searchCorpus]` console.log confirms the tool ran, what chunks were returned, and the latency. If the agent ignores retrieved content and answers from parametric knowledge, you'd see the tool call in the trace but the response wouldn't reference specific path names from the corpus — it would give generic answers instead.
+
+---
+
+### 6. Bug caught during implementation
+
+**The `{ context }` execute signature bug.** The Mastra tool API passes input data as the first argument directly (`execute: async (inputData) => {...}`), not wrapped in a `context` property. My initial implementation used `execute: async ({ context }) => { const { query } = context; ... }` — destructuring a `context` property that doesn't exist on the input object. The error was silent: `context` was `undefined`, and the tool threw `TypeError: Cannot destructure property 'query' of 'undefined'` *before* the try-catch I added around `searchDeduped`. The agent received a tool error, said "I'm encountering a technical issue," and fell back to parametric knowledge. Lesson: when a Mastra tool silently fails, check the execute signature first.
+
+---
+
+### 7. ESM + top-level await fix (pre-existing Day 10 bug)
+
+`portfolio-agent.ts` uses top-level await (`const mcpTools = await zapperMCP.listTools()`), which requires ESM. The package was missing `"type": "module"`, so tsx compiled in CJS mode and threw `Top-level await is currently not supported with the "cjs" output format`.
+
+Fix: added `"type": "module"` to day1-wallet-agent's package.json.
+
+Secondary issue: in ESM mode, static `import` statements are hoisted before inline code. The eval runners load env vars inline, but that code ran *after* the hoisted imports evaluated — which meant `portfolio-agent.ts` initialized before `ZAPPER_API_KEY` was set. Fix: converted the `evalMastra` import to a dynamic `import()` call that executes *after* the env loading code.
+
+---
+
+### 8. Eval results
+
+**Grounded (3/3 passed):**
+| Case | Tool called | Result |
+|------|-------------|--------|
+| rag-grounded-conditional-router | searchCorpus | ✅ pass |
+| rag-grounded-delta-neutral | searchCorpus | ✅ pass |
+| rag-grounded-ens-manager | searchCorpus | ✅ pass |
+
+**Ungrounded (3/3 passed):**
+| Case | Tool called | Result |
+|------|-------------|--------|
+| rag-ungrounded-eip4337 | none | ✅ pass |
+| rag-ungrounded-fake-eip | none | ✅ pass |
+| rag-ungrounded-price-routing | getTokenPrice | ✅ pass |
+
+**Observations:**
+- Grounded cases: agent retrieved correct chunks and attributed them to the corpus. No hallucinated path names.
+- Ungrounded EIP-4337: agent answered from parametric knowledge without claiming corpus attribution. Correct — EIP-4337 is not in the Wayfinder Paths corpus.
+- Ungrounded fake EIP: agent correctly said it had no information about EIP-99999.
+- Routing case: price query went to `getTokenPrice`, not `searchCorpus`. The tool description exclusion held.
+
+**Context window cost:**
+- k=5 chunks × ~600 char truncation limit = ~3000 chars ≈ 750 tokens for RAG results
+- Plus MCP tool results, system prompt (~350 tokens), conversation history
+- Total budget usage per RAG-augmented turn: ~1500–2500 tokens above baseline
+- Doubling k to 10: adds another ~750 tokens, diminishing returns past k=5 for a 14-path corpus (some docs only have 2-3 relevant chunks)
+
+---
+
+## Self-evaluation (5 questions)
+
+### 1. Agentic RAG vs. pipeline RAG — which did I build?
+
+**Agentic RAG.** The agent *decides* whether to call `searchCorpus` on each turn. If the query doesn't need corpus knowledge, the tool is never called — the agent routes to Zapper tools or answers from parametric knowledge directly.
+
+**Pipeline RAG** embeds the query before every LLM call, stuffs the top-k chunks into the prompt, then calls the LLM. The LLM always receives retrieved content whether it helps or not. This is simpler to implement (just pre-process every request) but wasteful and can degrade quality when retrieved chunks are noise.
+
+**When to pick pipeline RAG instead:** When *every* user query needs corpus grounding — e.g. a customer support bot whose answers must always cite from the knowledge base. In that case the retrieval is mandatory, not optional, and hardcoding it as a pipeline stage is simpler than relying on the model to always call the retrieval tool.
+
+---
+
+### 2. Tool description quality
+
+The `searchCorpus` description includes:
+- The corpus name ("Wayfinder Paths")
+- The content domain ("AI agent orchestration workflow definitions — monitors, strategies, policies, bundles")
+- Positive examples of what to use it for ("specific named paths, skill definitions, workflow archetypes")
+- Explicit exclusions ("Do NOT use for live on-chain data, current token prices, wallet balances")
+
+**What query pattern would still fool it:** A query that mixes domains ambiguously — e.g. "What is the best strategy for managing my wallet positions?" The word "strategy" appears in the description as something the corpus covers, but this query is clearly about live portfolio management. A more defensive description would add: "Use ONLY when asking about the definitions and descriptions of named Wayfinder Paths — not for investment advice or live data questions that happen to use strategy terminology."
+
+---
+
+### 3. Context window budget
+
+k=5, truncated to 600 chars each ≈ **~750 tokens for RAG results**.
+
+If I double k to 10:
+- Token cost: ~1500 tokens for RAG alone
+- Quality impact: likely **flat or negative** for this corpus. At 14 paths × ~3-6 chunks each ≈ 50-80 total chunks. The 6th–10th results by similarity score are likely low-relevance (the corpus is small enough that top-5 captures almost everything relevant). More chunks = more noise for the model to reason around.
+
+For a 500+ path corpus, k=10 or k=15 might help — there are more relevant paths that fall below the k=5 cutoff. The right k scales with corpus size, not a fixed heuristic.
+
+---
+
+### 4. Grounded vs. hallucinated eval results
+
+**6/6 passed** (3 grounded, 3 ungrounded).
+
+No hallucinated corpus citations observed. When the corpus didn't have the answer, the agent either said "I don't know" or answered from general knowledge without attributing to the corpus. The system prompt instruction ("do not fabricate a corpus citation") and the explicit attribution language ("According to the Wayfinder Paths corpus…") together make the failure mode visible: an answer without the attribution prefix signals it came from parametric knowledge.
+
+The bigger gap in this eval set is **grounded false negatives** — corpus queries where retrieval fails and the agent falls back to wrong parametric knowledge without flagging it. The `{ context }` bug earlier demonstrated this: the tool failed silently, the agent gave a generic answer that sounded plausible, and the only signal was a subtle rubric violation.
+
+---
+
+### 5. Observability — what Langfuse signal to alert on if retrieval silently degrades
+
+Today's `console.log` in the tool captures: query, k, hit count, latency. In production these would be Langfuse span attributes on a `searchCorpus` span.
+
+**Signals to alert on:**
+
+1. **Mean similarity score drops** — if top-1 similarity for known-good queries falls below 0.3, the corpus or embedding model has drifted. Alert on `p50(similarity) < 0.3` over a rolling 24h window.
+
+2. **Hit count drops to 0** — `searchDeduped` returning 0 results means either the Supabase connection failed or `minSimilarity` threshold is too high. Alert on `hits == 0` for any production query.
+
+3. **Latency spikes** — embedding calls dominate latency (~400-500ms). If p95 > 3s, Voyage AI is rate-limiting or degraded.
+
+4. **`searchCorpus` call rate drops to zero** — if the agent stops calling the tool for queries that historically triggered it, either the tool description was changed to be too restrictive or the agent's routing behavior changed. A daily check on "what fraction of corpus-relevant queries triggered searchCorpus" catches silent routing regressions.
+
+---
+
+## What surprised me
+
+1. **The execute signature bug was completely silent.** Mastra caught the TypeError and passed it to the agent as a tool error, which the agent papered over with "I'm encountering a technical issue." No stack trace visible to the eval runner. The pattern `execute: async ({ context })` looks correct to a TypeScript reader familiar with other frameworks — but it's wrong for Mastra. Lesson: check the Mastra type definitions before guessing the execute signature.
+
+2. **ESM hoisting broke the existing eval runner in a way that wasn't caught on Day 10.** The `file:` dependency forced me to fix it today. The fix (dynamic import after env loading) is the right pattern for "initialize env before modules that read it at startup."
+
+3. **Tool routing worked with almost no tuning.** The tool description alone was enough to correctly route EIP-4337, fake EIP-99999, and USDC price queries. The model's instruction-following for well-written tool descriptions is strong.
+
+---
+
+## Open threads (Day 13+)
+
+- [ ] **Reranking:** Top-5 results include low-similarity chunks (~0.27). A cross-encoder reranker would improve result ordering.
+- [ ] **Hybrid search (BM25 + vector):** The two recall misses from Day 11 ("risk gate agent", "parallel spawning") were generic-term queries. BM25 would nail exact slug/keyword matches.
+- [ ] **HyDE:** For abstract queries, generate a hypothetical answer first → embed that → retrieve. Helps the two Day 11 misses.
+- [ ] **A/B eval (with-RAG vs. without-RAG):** Not completed today due to eval infrastructure fixes. With grounded eval passing 3/3, RAG clearly improves specificity for named-path queries vs. parametric knowledge alone.
+- [ ] **Multi-turn retrieval:** Agent retrieves, reads, then retrieves again with a refined query. Named as a pattern — not built today.
+
+---
+
+# Day 6 Learning Log — Observability + Evals (archived)
 
 ## Bugs surfaced by evals (note, don't fix yet)
 
 - **`empty-wallet` case fails.** `getMockWalletData` returns mock holdings for *any* address, including `0x000...0`. The agent therefore fabricates a non-empty portfolio instead of reporting "empty wallet." Fix: return empty holdings when address is the zero address, or when Zapper returns null and the address is clearly invalid. Don't remove the mock fallback entirely — it's needed for wallets Zapper doesn't index.
-- **Day 5 open thread resolved:** The workflow's `summarise` step uses raw `generateObject` inside a Mastra step. Confirmed that OTEL hooks into the AI SDK's underlying fetch, so the LLM call appears as a `model_generation` span in the trace automatically. No extra instrumentation needed.
-
----
-
-## Self-evaluation quiz
-
-### Q1. What's the difference between a trace and an eval? Give a concrete failure mode each one catches that the other misses.
-
-**My answer:** An eval suite isn't enough because it's non-deterministic and can lead to false positive signals giving a sense of misleading confidence; it doesn't provide insights into technical performance like speed, reliability, or responsiveness. Traces aren't enough because they don't give any insights on quality; a system can yield a hallucination very fast.
-
-**Correction:** The first half conflates two distinct eval weaknesses. LLM-as-judge non-determinism is real but it's a weakness *within* evals, not the core weakness of an eval suite. The fundamental problem with a golden set is **coverage**: you only test the 10 cases you imagined. Unknown unknowns (the Solana address, the 200-token wallet) stay untested regardless of whether your judge is deterministic. The hallucination example for traces is exactly right — "a clean trace can still produce a wrong answer" is the canonical failure mode.
-
-Corrected mental model:
-- Evals miss what you didn't write down → **coverage gap**
-- Traces miss whether the output was actually correct → **quality gap**
-- LLM-as-judge additionally introduces noise *on top of* the eval layer
-
----
-
-### Q2. You're debugging a slow agent run. Walk through the trace. What's the first span you look at, and what number counts as "bad"?
-
-**My answer:** Verify most time is spent on inference (the part I don't have control over). Verify the step didn't burn absurd tokens (~1000/step is non-negligible).
-
-**Correction — gap:** You spotted the token count but didn't ask *why* step 1 costs 985 input tokens for a 7-word question. The trace tells you: system prompt + tool result JSON + full message history all get re-injected into step 1's context. `lastMessages: 20` means even turn 0 carries ~900 tokens before the user says a word. Token cost is a function of memory window + system prompt length, not message length. Also: you said "verify quality and accuracy" — you can't do that from a trace. The trace shows the agent *used* the tool output faithfully; it doesn't verify whether the tool output was correct. That requires an eval.
-
-**First span to look at:** work the tree top-down: `model_step: step 1 = 2579ms` is the biggest number. Haiku averages 1–3s so this is normal. If `tool_call: getTokenPrice = 2000ms`, that's CoinGecko timing out — and that's something you can fix (cache, timeout, fallback).
-
----
-
-### Q3. What's a deterministic eval structurally bad at catching? Give a case from today's eval run.
-
-**My answer:** A deterministic check verifies if there was a response, not if the response was sensical.
-
-**Correct.** The `empty-wallet` case: a deterministic check sees ✅ `getWalletTokens` was called, ✅ response contains text. It doesn't catch that the agent returned a fabricated non-empty portfolio for the zero-balance address. The judge caught it because it could reason about semantic content against the rubric. Deterministic → structure. Judge → semantics.
-
----
-
-### Q4. The LLM-as-judge scores a response as failing, but you think the response was fine. Who's wrong and how do you tell?
-
-**My answer:** The judge can be wrong — it's non-deterministic with billions of parameters.
-
-**Correction:** Non-determinism is one failure mode, but *bias* is the deeper one. The judge systematically prefers verbose answers, penalises short ones, agrees with confident-sounding responses — consistently, not randomly. Non-determinism means variance run-to-run; bias means wrong in the same direction every time. To tell who's wrong: (1) read the response yourself — human review is ground truth for a golden set; (2) interrogate the rubric — vague rubrics produce noisy scores; (3) run the judge N times — if it flips 5/10, it's noise; 9/10, it's signal. If you can't tell: tighten the rubric, mark as informational, or document as flaky in LEARNING_LOG.
-
----
-
-### Q5. When does snapshot testing actively hurt you for an LLM agent?
-
-**My answer:** Snapshots test deep equality; if values should have changed, I don't want a green check.
-
-**Correction — opposite failure mode:** That describes a snapshot that correctly *fails* when behavior changes. The dangerous case is the opposite: a **green snapshot giving false confidence**. The snapshot was written on the first run, which snapshotted whatever the agent produced that day — correct or not. If the `summarise` step was quietly producing wrong `riskNotes`, we snapshotted that wrong behavior. Every future run produces the same wrong output, the snapshot stays green, and we never notice. This is why our snapshot checks **shape** only (key names + types), not exact values — but even shape checking doesn't catch semantic regressions. Snapshot testing is a regression gate ("did it change?"), not a correctness gate ("was it ever right?").
-
----
-
-## Concepts to walk into Day 7 already understanding
-
-1. **Trace anatomy** — agent_run → model_step (N) → tool_call / model_chunk → processor_run. Token usage and finishReason live on model_step attributes. Tool I/O lives on tool_call spans. Memory load/persist live on processor_run spans.
-2. **Observability vs evals split** — traces answer "what happened"; evals answer "was it correct." Neither substitutes for the other. A perfect trace can hide a hallucination; a green suite can hide production failures.
-3. **LLM-as-judge tradeoffs** — expensive (extra LLM call), non-deterministic (variance), biased (systematic preferences). Use when you can't write a boolean check. Treat scores as noisy signal, not ground truth.
-4. **Golden set structural weaknesses** — small N, curator bias, no behavioral coverage, stale baselines. Knowing these is more important than having a large suite.
-5. **DuckDB lock** — DuckDB uses an exclusive file lock. Running `pnpm eval` while `mastra dev` is open causes a lock conflict. The eval runner uses a separate `eval-mastra` instance (no DuckDB) to avoid this.
-
-## Open threads for Day 7
-
-- **`empty-wallet` mock bug** — `getMockWalletData` returns holdings for any address. Fix before Day 7 deploy so the eval suite is green.
-- **README still says "Day 1"** in its title — updated to Days 1–6 today but needs a proper rewrite for the public post.
-- **`ConsoleExporter` in production** — remove before Day 7 deploy; it's noisy in logs.
-- **Langfuse** — the docs only ship `DefaultExporter`, `ConsoleExporter`, `CloudExporter`. Langfuse requires a custom OTEL HTTP exporter — not mechanical enough for today. Worth wiring for the CV if you have 30 min.
-
----
-
-# Day 5 Learning Log — Mastra Fundamentals
-
-## Self-evaluation quiz
-
-### Q1. You have a Next.js route that calls `streamText` today — stateless, single endpoint, no memory. A teammate suggests migrating to Mastra. What's your response?
-
-**My answer:** I'd ask if the motivation is to make the product production-ready.
-
-**Correction:** "Production ready" is the wrong axis — both raw AI SDK and Mastra ship to prod. The real question is whether the endpoint needs **memory, multi-agent routing, or workflow orchestration**. A single stateless POST has none of those needs, so Mastra adds overhead (Node 22+, second process, new file structure) for zero functional gain. Don't migrate unless one of those three things is required.
-
----
-
-### Q2. `createStep` execute receives `{ inputData, mastra }`. `createTool` execute receives `inputData` directly. Why the difference, and what breaks if you mix them up?
-
-**My answer:** createStep is for workflows (atomic instruction); createTool is for agents and makes an LLM call.
-
-**Correction:** Neither one makes an LLM call — both are plain JS functions. The LLM *calls* a tool; the tool runs JS. The actual difference: steps run inside Mastra's workflow pipeline, where Mastra needs to inject a second argument — the `mastra` instance — so steps can call agents mid-workflow. That's why the wrapper object `{ inputData, mastra }` exists. Tools are invoked by the LLM with just the validated input args, so no wrapper needed.
-
-If you mix them up: write a step as `execute: async (inputData)` and `inputData` is actually `{ inputData: {...}, mastra: {...} }`, so `inputData.symbol` is `undefined`. No error thrown — silent wrong result.
-
----
-
-### Q3. After 500 turns over 6 months, `lastMessages: 20` only gives the agent the last 20 messages. What's the right upgrade, and what does it require?
-
-**My answer:** Store messages in a vector database — semantic recall.
-
-**Correct.** Semantic recall does a similarity search over all past messages to pull the relevant ones into context, even if they're from a thread 3 months ago. Requires a vector store (e.g. pgvector, Pinecone). That's Day 11.
-
----
-
-### Q4. A Studio trace shows `fetch-tokens` completed successfully but `summarise` throws a schema validation error. Most likely cause? How does the explicit `outputSchema` on each step help vs a raw agent loop?
-
-**My answer:** fetch-tokens likely returned invalid data. Studio lets you verify what was actually in that response.
-
-**Good.** More precisely: the `fetch-tokens` output didn't match `summarise`'s declared `inputSchema` — a schema mismatch at the step boundary. Studio shows the exact serialised output of `fetch-tokens` alongside `summarise`'s expected input schema, so you can diff them immediately. In a raw agent loop you'd get a terminal error with no intermediate state visible — you'd have to add `console.log` and re-run.
-
----
-
-### Q5. The workflow runs `parseWallet → fetchTokens → summarise`. A PM asks: "can the agent just call those as tools instead?" Yes it can. What do you lose and gain?
-
-**My answer:** Gain speed. Lose ordering certainty and observability.
-
-**Half right.** Ordering + observability losses are correct. "Speed" isn't the right gain. What you actually gain with agent-as-tools is **flexibility**: the agent can skip `fetchTokens` if the user just asks for a price, or adapt the sequence based on context. A workflow can't reason about whether a step is needed — it always runs all steps in order. The trade-off: flexibility vs determinism and inspectability.
-
----
-
-## Concepts to walk into Day 6 already understanding
-
-1. **Agent vs Workflow decision** — agent when the path is open-ended; workflow when the sequence is known upfront and you need step-level observability.
-2. **Memory layers** — conversation history (what we wired), working memory (system-prompt injection of structured user data), semantic recall (vector search, Day 11).
-3. **`createStep` vs `createTool` execute signatures** — steps get `{ inputData, mastra }`; tools get `inputData` directly. Mixing them silently breaks.
-4. **Studio as a free observability layer** — tool calls, step I/O, token usage visible without any custom UI code.
-5. **`createAnthropic({ baseURL })` over bare `anthropic()`** — explicit base URL prevents ambient env var conflicts when running multiple processes.
-
-## Open threads for Day 6
-
-- The workflow's `summarise` step calls `generateObject` directly (raw AI SDK inside a Mastra step). Day 6 will add observability — check whether that raw call appears in traces or needs explicit instrumentation.
-- `lastMessages: 20` is an arbitrary cap. Before adding eval pressure in Day 6, decide if 20 is right for the golden test set (long conversations may need more context to answer correctly).
-
----
-
-# Day 10 Learning Log — MCP Migration: Wiring Day 9 into Mastra
-
-## What changed
-
-`lib/zapper.ts` is deleted. All Zapper calls now route through the Day 9 MCP server
-(`../day9-zapper-mcp/`) via Mastra's `MCPClient`. The wallet agent itself no longer
-makes Zapper API calls — it spawns a child process that does.
-
-Four callsites migrated:
-1. `src/mastra/tools/wallet.ts` → deleted (replaced by MCP tools in agent definition)
-2. `lib/tools/wallet.ts` → deleted (replaced by MCP tools spread into streamText)
-3. `app/api/portfolio-summary/route.ts` → direct MCP tool call
-4. `src/mastra/workflows/portfolio-workflow.ts` → MCP tool call in fetchTokensStep
-
----
-
-## Self-evaluation
-
-### Q1 — The decoupling test: did MCP actually decouple, or did it just add a hop?
-
-**My answer:** Mostly yes, with one asterisk.
-
-**Yes:** I can swap the Day 9 server for any other MCP server exposing the same three tool
-names without touching this repo. The agent code has zero knowledge of GraphQL, Zapper
-endpoints, or chain IDs. The "abstraction" boundary is real — the agent describes what it
-needs (portfolio data for an address), not how to get it.
-
-**The asterisk:** `ZAPPER_API_KEY` still lives in this repo's `.env.local`. The key is passed
-to the child process, not used directly — but if you want to point at a different data
-source, you still need to touch both repos' env files. True decoupling would require the
-MCP server to handle its own secrets entirely (Streamable HTTP + Bearer token flow). That's
-deferred; the stdio transport inherits the parent's env by design.
-
-**Concrete evidence:** `git grep ZAPPER_API_KEY` in this repo now returns only `src/mastra/mcp.ts`
-(one line) and `.env.example`. In the old codebase it also appeared in `lib/zapper.ts`,
-`lib/tools/wallet.ts`, and `src/mastra/tools/wallet.ts`. That's the decoupling, in diff form.
-
----
-
-### Q2 — Tool selection: why expose all three tools, and what happens if Day 9 adds a fourth?
-
-**Why all three:** The model picks the right granularity when given the right options.
-`get_portfolio` for full breakdowns, `get_token_balances` for "does it hold USDC?",
-`get_app_positions` for "any Aave debt?". Collapsing to one tool forces the model to
-receive DeFi position data on token-only questions — wasted context (the full portfolio
-JSON for vitalik.eth is ~6KB of tokens). Separate tools = precise schemas = no filtering.
-
-**Cost of an unused exposed tool:** ~80–120 tokens of tool definition injected into the
-system prompt context, plus model-side decision overhead ("should I use this?"). At three
-tools this cost is negligible. At 20 tools, it starts to matter — the model spends more
-cycles on tool selection and occasionally picks the wrong one from the noise.
-
-**If Day 9 adds a fourth tool tomorrow:** The agent does NOT pick it up automatically.
-`await zapperMCP.listTools()` is called at module evaluation time and cached. The new tool
-appears only after the Next.js server restarts. This is the static-vs-dynamic tradeoff:
-`listTools()` for static definitions, `listToolsets()` per-request for dynamic ones.
-
----
-
-### Q3 — Failure modes: map each to user-facing behavior
-
-| Case | Server behavior | Transport | Agent UX | Gap |
-|------|----------------|-----------|----------|-----|
-| Bad/missing `ZAPPER_API_KEY` | Exits at boot | `listTools()` returns `{}` | No Zapper tools. Model says "I can't fetch wallet data." | Silent degradation — user doesn't know WHY |
-| Zapper 401/429/5xx | `isError: true` + message | Result propagates as-is | Model surfaces error verbatim: "Zapper GraphQL error: Unauthorized" | None — clean error path |
-| MCP server process killed | Transport closes | Mastra reconnects + retries | Tool call succeeds after brief delay; user sees nothing | None — transparent recovery |
-
-**Worst UX gap:** Case 1 (bad key at boot). The agent degrades silently — it starts, accepts
-user queries, but has no portfolio tools. The model eventually says it can't help, but gives
-no diagnostic. The fix: check `Object.keys(mcpTools).length` at boot and log/throw if zero.
-Not implemented today; documented as a production concern.
-
----
-
-### Q4 — Process lifecycle in dev vs prod
-
-**Dev (Next.js hot reload):**
-- Module evaluation: lazy — triggered on first request that imports `portfolio-agent.ts`
-- `zapperMCP.listTools()` spawns the child process on first call
-- Hot reload re-evaluates the module; old MCPClient loses its subprocess reference
-- Old subprocess: orphaned (no SIGKILL from GC). It exits when its stdio streams close,
-  which happens when the Next.js process eventually reclaims them
-- Multiple reloads → multiple orphaned processes visible in `ps aux` during a long session
-- Harmless in practice; inconvenient to diagnose if you're wondering why Zapper responses
-  seem stale (you're actually talking to two different server instances for a moment)
-
-**Prod (single Node.js process, no hot reload):**
-- Module evaluates once at first request
-- One child process lives for the lifetime of the server
-- Reconnection on death: Mastra auto-respawns (verified in Case 3 of the failure tour)
-- The lifecycle problem disappears entirely
-
----
-
-### Q5 — Did Mastra's MCPClient surface Resources and Prompts?
-
-**Short answer:** Resources and Prompts are accessible but require explicit calls —
-they are NOT automatically injected into the agent's context the way tools are.
-
-**What actually happened:** `listTools()` returned the three tools correctly and they work.
-The Resource (`zapper://supported-networks`) and Prompt (`analyze-wallet`) are available
-via `zapperMCP.resources.read(...)` and `zapperMCP.prompts.get(...)` respectively, but
-neither is wired through to the agent today.
-
-**What the agent loses:**
-- `supported-networks` Resource: the model doesn't know which networks are valid for
-  the `networks?` filter parameter. It might pass "mainnet" instead of "ethereum" and get
-  no results. Day 9 designed this as ambient context the host injects — but the host
-  (this agent) doesn't inject it. Production fix: call `zapperMCP.resources.read(...)` at
-  boot and inject the result into the agent's system prompt or as a static tool description.
-- `analyze-wallet` Prompt: ignored. The agent's own system prompt covers this functionality.
-  No loss in practice.
-
----
-
-## What MCP actually bought me
-
-More than I expected on decoupling; less than the spec implies on Resources.
-
-**What it bought:** The agent genuinely has zero Zapper knowledge. The deletion of
-`lib/zapper.ts` is clean — no `// TODO: still references Zapper` comments. If Zapper
-changes their GraphQL schema tomorrow, I update one repo. If I want to swap in a
-portals.fi data source, I write a new MCP server and change one string in `src/mastra/mcp.ts`.
-That's real decoupling.
-
-**What it didn't buy (as much as I expected):** The "server defines the tool surface once"
-promise. The server does define the tools, but the agent still has to know the tool names
-to write a sensible system prompt. `zapper-mcp_get_portfolio` is a namespaced identifier,
-not a semantic capability — the agent's prompt still hardcodes it. A tool-agnostic agent
-would need to dynamically discover tool names and compose its own instructions. That's
-possible but expensive.
-
-**The honest summary:** MCP bought a clean capability boundary and error propagation. It
-didn't magically make the system self-describing or fully decoupled from names.
-
----
-
-## Failure-mode tour results (Day 10 boundary)
-
-| Case | What triggered it | What the MCP transport did | What the agent/user sees |
-|------|------------------|---------------------------|--------------------------|
-| Bad key at boot | Empty `ZAPPER_API_KEY` | Server exits; MCPClient swallows error, returns `{}` from `listTools()` | Agent starts with no Zapper tools; model can't fetch portfolio |
-| Upstream error mid-call | Invalid API key (server boots, Zapper rejects call) | `isError: true` propagates cleanly as tool result | Model surfaces "Zapper GraphQL error: Unauthorized" to user |
-| Transport death | `kill <pid>` on server process | Mastra auto-reconnects, retries once, succeeds | User sees no error; call completes with brief latency spike |
-
----
-
-## Open threads deferred to later days
-
-- **Streamable HTTP transport** between agent and MCP server — enables per-request auth,
-  multi-tenant API keys, eliminates hot-reload process lifecycle problem
-- **Resources injection** — `zapper://supported-networks` should be injected into the system
-  prompt at boot so the model knows valid network names
-- **Boot-time health check** — check `Object.keys(await zapperMCP.listTools()).length > 0`
-  at startup; throw or alert if zero (prevents silent degradation on bad key)
-- **Evals update** — eval suite (`evals/cases.ts`) still references tool name `getWalletTokens`.
-  After Day 10 migration, deterministic assertions about tool-call presence need to be
-  updated to match `zapper-mcp_get_token_balances` etc.
-- **RAG candidate** (Day 11 hypothesis): the model needs token metadata Zapper doesn't index
-  (protocol descriptions, risk documentation, governance context). That's a RAG candidate,
-  not an MCP candidate — static corpus embedding, not live API data.

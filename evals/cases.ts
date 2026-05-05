@@ -159,4 +159,104 @@ export const cases: EvalCase[] = [
     input: '0xd8dA6BF26964aF9D7eEd9e03E53415D37aA96045',
     evalType: 'snapshot',
   },
+
+  // ── Day 12 RAG: grounded cases ─────────────────────────────────────────────
+  // Questions whose answers ARE in the Wayfinder Paths corpus.
+  // Pass criteria: agent calls searchCorpus AND answer is consistent with corpus content.
+
+  {
+    id: 'rag-grounded-conditional-router',
+    description:
+      'Grounded RAG case — corpus contains the Conditional Router Reference policy path. ' +
+      'Agent must call searchCorpus and return an answer describing it as a routing/policy path. ' +
+      'Tests that the agent retrieves and uses corpus content for a known path name.',
+    input: 'What is the Conditional Router Reference path and what type of path is it?',
+    expectedToolCall: 'searchCorpus',
+    judgeRubric:
+      'The response must describe the Conditional Router Reference as a policy or routing-type ' +
+      'Wayfinder path. It may describe its purpose (conditional branching, routing logic). ' +
+      'It must NOT claim it is a monitor or strategy type. ' +
+      'It must NOT claim to have no information about this path.',
+    evalType: 'llm-judge',
+  },
+
+  {
+    id: 'rag-grounded-delta-neutral',
+    description:
+      'Grounded RAG case — corpus contains multiple delta-neutral paths (virtual-delta-neutral, ' +
+      'kaito-pt-delta-neutral). Agent must call searchCorpus and surface at least one. ' +
+      'Tests retrieval of strategy/monitor paths by topic.',
+    input: 'What Wayfinder paths relate to delta-neutral strategies?',
+    expectedToolCall: 'searchCorpus',
+    judgeRubric:
+      'The response must mention at least one delta-neutral related Wayfinder path by name ' +
+      '(e.g. virtual-delta-neutral, KAITO PT Delta-Neutral, or similar). ' +
+      'It must describe what the path does in terms of delta-neutral or carry strategies. ' +
+      'It must NOT fabricate path names that were not in the retrieved results.',
+    evalType: 'llm-judge',
+  },
+
+  {
+    id: 'rag-grounded-ens-manager',
+    description:
+      'Grounded RAG case — corpus contains the ENS Manager path. ' +
+      'Agent must retrieve and describe it. ' +
+      'Tests that a relatively distinct path (ENS / DNS rather than DeFi finance) is still retrieved.',
+    input: 'What does the ENS Manager path do?',
+    expectedToolCall: 'searchCorpus',
+    judgeRubric:
+      'The response must describe the ENS Manager path in terms of ENS (Ethereum Name Service) ' +
+      'or domain/name management. It should reference configuration or management of ENS names. ' +
+      'It must NOT conflate this with a portfolio or financial strategy path.',
+    evalType: 'llm-judge',
+  },
+
+  // ── Day 12 RAG: ungrounded cases ───────────────────────────────────────────
+  // Questions whose answers are NOT in the corpus.
+  // Pass criteria: agent does NOT fabricate a corpus citation.
+  // Acceptable: answer from general knowledge clearly labeled as such, OR "I don't have that."
+
+  {
+    id: 'rag-ungrounded-eip4337',
+    description:
+      'Ungrounded RAG case — EIP-4337 (account abstraction) is not a Wayfinder Path. ' +
+      'The agent may answer from general knowledge but must not claim the corpus defines EIP-4337. ' +
+      'Key failure mode: "According to the Wayfinder Paths corpus, EIP-4337 is..."',
+    input: 'What is EIP-4337 and how does account abstraction work?',
+    judgeRubric:
+      'The response must explain EIP-4337 / account abstraction correctly (or say it lacks details). ' +
+      'It must NOT attribute this explanation to the Wayfinder Paths corpus or claim the corpus ' +
+      'contains EIP-4337 content. Phrases like "according to the corpus" or "the corpus describes" ' +
+      'applied to EIP-4337 content are a failure.',
+    evalType: 'llm-judge',
+  },
+
+  {
+    id: 'rag-ungrounded-fake-eip',
+    description:
+      'Ungrounded RAG case — EIP-99999 does not exist. ' +
+      'The agent should not hallucinate an EIP definition, and must not fabricate a corpus hit. ' +
+      'Tests the "I don\'t know" behavior for a definitively non-existent topic.',
+    input: 'What does EIP-99999 define?',
+    expectNoToolCall: true,
+    judgeRubric:
+      'The response must acknowledge that EIP-99999 does not exist or that the agent has no ' +
+      'information about it. It must NOT describe a definition or purpose for EIP-99999. ' +
+      'It must NOT state that the Wayfinder corpus contains information about EIP-99999.',
+    evalType: 'llm-judge',
+  },
+
+  {
+    id: 'rag-ungrounded-price-query',
+    description:
+      'Routing check — a live price query must use Zapper/getTokenPrice, not searchCorpus. ' +
+      'Tests that the tool description prevents corpus lookups for on-chain data.',
+    input: 'What is the current price of USDC?',
+    expectedToolCall: 'getTokenPrice',
+    judgeRubric:
+      'The response must provide a price (or acknowledge it cannot be fetched) for USDC. ' +
+      'It must NOT call searchCorpus for a price query. ' +
+      'It must NOT attribute the USDC price to the Wayfinder corpus.',
+    evalType: 'llm-judge',
+  },
 ];
