@@ -1,6 +1,8 @@
-# Wallet Agent — Days 1–12
+# Wallet Agent — Week 2 (Days 1–14)
 
-Streaming crypto portfolio assistant built across a 21-day AI engineering sprint. Uses Vercel AI SDK + Mastra for agent orchestration, with full observability and an eval suite.
+**Live demo: https://day1-wallet-agent.vercel.app** | [Blog post](BLOG_WEEK2.md) | [Production gap list](PRODUCTION.md)
+
+A TypeScript agent that grounds itself via MCP-routed live wallet data and pgvector RAG. Ask it about a crypto wallet or a Wayfinder AI workflow path — it routes to the right source and cites what it retrieved. Built across a 21-day AI engineering sprint using Vercel AI SDK, Mastra, Anthropic Claude, Voyage AI embeddings, Supabase pgvector, and Langfuse observability.
 
 ## Architecture (Day 12+)
 

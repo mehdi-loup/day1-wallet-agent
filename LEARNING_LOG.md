@@ -255,3 +255,164 @@ What did you ship without that a real production system would require? Pick the 
 - [ ] Mid-stream 529 boundary: use AI SDK `onError` stream callback to inject terminal error chunk
 - [ ] Langfuse tracing on the raw AI SDK chat route (currently console-only)
 - [ ] Separate Supabase projects for dev vs prod
+
+---
+
+# Day 14 Learning Log — Deploy + Smoke Test
+
+## Local-vs-prod divergences
+
+### 1. `output: 'standalone'` broke `/api/health` on Vercel (fixed)
+
+`next.config.ts` had `output: 'standalone'` unconditionally. On Vercel, this changes how the
+routes manifest is written — the `/api/health` Lambda was not registered in Vercel's routing
+table. Requests to `/api/health` silently fell through to a pre-rendered static 404 page
+(edge-cached, `x-matched-path: /404`, `x-vercel-cache: HIT`). The other API routes (`/api/chat`,
+`/api/portfolio-summary`) were already in the Vercel deployment from a previous `vercel deploy`
+CLI run and didn't regress.
+
+**Diagnostic signal:** response headers `x-matched-path: /404` + `age: 1653` + `x-vercel-cache: HIT`
+— a Lambda response would never have age > 0 on a first hit.
+
+**Fix:** gated `output: 'standalone'` on `!process.env.VERCEL`. Docker builds still get standalone;
+Vercel builds don't, so all routes are correctly registered as Lambda functions.
+
+**Cheapest test that would have caught this pre-deploy:** `curl -si <url>/api/health | grep x-matched-path`
+— if it says `/404`, the route isn't registered.
+
+### 2. MCP server is local-only (expected, documented)
+
+`src/mastra/mcp.ts` resolves the server binary at `../day9-zapper-mcp/build/server.js`. On Vercel,
+`process.cwd()` is `/vercel/path0/` and the sibling directory doesn't exist. The MCPClient throws
+"Cannot find module /vercel/day9-zapper-mcp/build/server.js". The error boundary in the chat
+route catches this and returns `{}` for mcpTools. Agent response: "I don't have access to live
+wallet data tools in this environment." — clean degradation, no 500.
+
+### 3. Langfuse coverage gap between routes
+
+The Mastra agent path (`/api/agent`) has Langfuse tracing via `@mastra/langfuse`. The chat route
+(`/api/chat`) — where `searchCorpus` actually runs — logs to console only. After the Day 12
+refactor that moved `searchCorpus` from the Mastra agent to the chat route, no single path
+exercises both Langfuse and RAG. You can get a Langfuse trace from the Mastra agent (Zapper
+queries) or see RAG working in the chat route (console logs only) — not both at once.
+
+---
+
+## Smoke test results (deployed URL: https://day1-wallet-agent.vercel.app)
+
+| Case | Expected | Result | Latency |
+|------|----------|--------|---------|
+| `price-eth` | calls `getTokenPrice` | ✅ PASS | 4127ms |
+| `corpus-conditional-router` | calls `searchCorpus` | ✅ PASS | 5670ms |
+| `corpus-delta-neutral` | calls `searchCorpus` | ✅ PASS | 5203ms |
+| `ungrounded-eip4337` | no tool call | ✅ PASS | 4782ms |
+| `price-refusal` | no tool call | ✅ PASS | 2236ms |
+| `mcp-wallet-holdings` | degrades gracefully | ✅ RAN | 3850ms |
+
+**Pass rate: 5/5 verified + 1 manual check = 6/6**
+
+### `/api/health` (all four legs)
+
+| Dep | Run 1 | Run 2 | Run 3 |
+|-----|-------|-------|-------|
+| postgres | 431ms | 373ms | 426ms |
+| pgvector | 464ms | 156ms | 437ms |
+| anthropic | 604ms | 790ms | 602ms |
+| langfuse | 0ms | 0ms | 0ms |
+
+pgvector variance (156–464ms, 3×) is the free-tier Supabase single-instance cold/warm state.
+This is the leg most likely to flake first under real traffic.
+
+---
+
+## Latency numbers
+
+| Query type | Warm latency | Steps | Bottleneck |
+|------------|-------------|-------|-----------|
+| Simple price query | 1869–2638ms | 2 | One LLM call + CoinGecko (~300ms) |
+| Corpus query (searchCorpus) | 5196–6080ms | 2 | Voyage embedding (~1000ms) + two LLM calls |
+
+**Dominant latency contributor on a corpus query:** Voyage AI embedding call inside `searchCorpus`
+(~1000ms observed locally in Day 12, consistent with 5.5s total for a two-step corpus query).
+
+Breakdown estimate for 5.5s corpus query:
+- First LLM call (tool selection): ~800ms
+- Voyage embedding: ~1000ms
+- pgvector search (from Vercel IAD1 → Supabase): ~400ms
+- Second LLM call (final response with corpus context): ~800ms
+- Streaming + network overhead: ~1.5s
+- Total: ~5.5s ✅
+
+**Cheapest 30% latency cut:** Colocate the Supabase project with the Vercel Lambda region (IAD1
+= us-east-1). If Supabase is in a different region, every pgvector query pays a cross-region
+roundtrip — consistent with the 156–464ms variance we see. Not free: Supabase region is
+immutable post-creation; you'd need to recreate the project in the target region and re-ingest
+the entire corpus. That's a 2-hour task. Do it before sharing the demo with anyone who'll notice
+latency.
+
+---
+
+## Self-evaluation (5 questions)
+
+### 1. Local-vs-prod divergence
+
+The largest gap was `output: 'standalone'` causing `/api/health` to silently 404 on Vercel while
+succeeding locally and in Docker. The divergence wasn't a code bug or a missing env var — it was
+a Next.js build configuration that means different things to different deployment targets.
+
+The cheapest pre-deploy test: `curl -si <prod-url>/api/health | grep -E "x-matched-path|HTTP"`.
+If `x-matched-path: /404` appears, the route isn't registered. Takes 10 seconds.
+
+### 2. Latency story
+
+Corpus query: ~5.5s total. Breakdown: ~800ms LLM tool-selection + ~1000ms Voyage embedding +
+~400ms pgvector + ~800ms LLM final response + ~1.5s streaming/network.
+
+Cheapest 30% cut: in-memory embedding cache for repeated queries (reduce Voyage calls from
+~1000ms to ~5ms on cache hit). Not free: needs TTL management and invalidation on corpus updates.
+
+### 3. Failure-mode reality check
+
+**Proved in production:**
+- MCP unreachable → clean degradation message, no 500 ✅
+
+**Trust but haven't proved in production:**
+- Anthropic 529 mid-stream: the error boundary catches 529s *before* streaming starts. A 529 that
+  arrives after headers are sent produces a truncated stream. Tested locally in theory but not
+  triggered in the deployed environment under real load.
+- Postgres drop during `searchCorpus`: the error boundary returns empty results with an error
+  flag. Verified locally; not explicitly triggered in production by dropping the Supabase
+  connection.
+
+### 4. Blog post's load-bearing claim
+
+"RAG-as-tool, not RAG-as-pipeline-stage: the model decides per-turn whether to call `searchCorpus`."
+
+Defensible on a tech screen: the 6-case eval suite (3 grounded, 3 ungrounded, all passing in
+production) shows the tool description alone correctly routes queries without any hardcoded logic.
+The code reference is `lib/tools/search-corpus.ts` — the description field is the entire routing
+policy.
+
+### 5. Senior signal vs. demo polish
+
+What looks like senior judgment: the named deferrals (reranking gated on corpus size, MCP
+deployment as a separate concern, auth before user load not before demo load), the cost math in
+PRODUCTION.md, and the honest Langfuse coverage gap.
+
+What looks like polished demo with thin substance: the `/api/health` 404 I shipped without
+catching — a 10-second `curl` check would have surfaced it before the blog post went out. The
+gap between "container runs locally" (Day 13's claim) and "all routes reachable from the public
+internet" (what today required fixing) is exactly the gap the Day 13 PRODUCTION.md should have
+included as an open item.
+
+---
+
+## Week 3 candidates
+
+- [ ] Langfuse tracing on the raw AI SDK chat route (1 PR — highest observability value)
+- [ ] MCP server as Streamable HTTP on Railway (makes the demo actually show live wallet data)
+- [ ] Rate limiting on `/api/chat` before any real sharing (per-IP `Map<string, {count, resetAt}>`)
+- [ ] Sync BM25+vector hybrid search into `packages/day11-rag` from `../day11-rag`
+- [ ] Separate Supabase projects for dev vs prod
+- [ ] Mid-stream Anthropic 529 boundary (AI SDK `onError` callback)
+- [ ] Corpus growth: ingest more Wayfinder Paths to validate hybrid search signal at >50 paths
