@@ -1,6 +1,6 @@
 import '@/lib/env';
 import { streamText, UIMessage, convertToModelMessages, stepCountIs } from 'ai';
-import { anthropic } from '@ai-sdk/anthropic';
+import { createAnthropic } from '@ai-sdk/anthropic';
 import { getTokenPrice } from '@/lib/tools/price';
 import { searchCorpus } from '@/lib/tools/search-corpus';
 import { zapperMCP } from '@/src/mastra/mcp';
@@ -56,12 +56,13 @@ export async function POST(req: Request) {
     });
 
     const result = streamText({
-      model: anthropic('claude-haiku-4-5-20251001'),
-      system: SYSTEM_PROMPT,
-      messages: await convertToModelMessages(messages),
+      model: createAnthropic({ baseURL: 'https://api.anthropic.com/v1' })('claude-haiku-4-5-20251001'),
       // Cap output at 1024 tokens per step. Haiku default is 8192; without a cap a
       // 6-step loop could emit 49K output tokens — ~$0.20/request at HN-scale traffic.
-      maxTokens: 1024,
+      // AI SDK v6 renamed maxTokens → maxOutputTokens.
+      maxOutputTokens: 1024,
+      system: SYSTEM_PROMPT,
+      messages: await convertToModelMessages(messages),
       tools: { getTokenPrice, searchCorpus, ...mcpTools },
       // OR semantics: any one condition firing stops the loop.
       // stepCountIs(6): hard ceiling — 6 gives room for a portfolio query + a few

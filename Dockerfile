@@ -12,6 +12,9 @@ RUN pnpm install --frozen-lockfile
 # Stage 2: build
 # Compiles TypeScript and produces .next/standalone/ via output: 'standalone' in next.config.ts.
 # next build traces the exact node_modules needed at runtime and copies them into standalone/.
+#
+# NEXT_PUBLIC_* vars are baked into the client JS bundle at build time — they cannot be
+# injected at docker run via -e. Pass them as build args: --build-arg NEXT_PUBLIC_PRIVY_APP_ID=xxx
 FROM node:20-alpine AS builder
 WORKDIR /app
 RUN corepack enable
@@ -20,6 +23,8 @@ COPY --from=deps /app/node_modules ./node_modules
 COPY --from=deps /app/packages/day11-rag/node_modules ./packages/day11-rag/node_modules
 COPY . .
 
+ARG NEXT_PUBLIC_PRIVY_APP_ID
+ENV NEXT_PUBLIC_PRIVY_APP_ID=$NEXT_PUBLIC_PRIVY_APP_ID
 ENV NEXT_TELEMETRY_DISABLED=1
 RUN pnpm build
 

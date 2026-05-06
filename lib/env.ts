@@ -10,6 +10,12 @@ const REQUIRED = [
 type RequiredKey = (typeof REQUIRED)[number]
 
 function validate() {
+  // NEXT_PHASE is 'phase-production-build' during next build — secrets aren't
+  // available in the builder stage and shouldn't be baked into the image.
+  // Validation runs on the first live request instead.
+  if (process.env.NEXT_PHASE === 'phase-production-build') {
+    return process.env as Record<RequiredKey, string> & NodeJS.ProcessEnv
+  }
   const missing = REQUIRED.filter((k) => !process.env[k])
   if (missing.length > 0) {
     throw new Error(
@@ -20,6 +26,6 @@ function validate() {
   return process.env as Record<RequiredKey, string> & NodeJS.ProcessEnv
 }
 
-// Throws at import time if any required secret is absent.
+// Throws at import time if any required secret is absent (skipped during next build).
 // Turso and Zapper are intentionally excluded — both have graceful fallbacks.
 export const env = validate()

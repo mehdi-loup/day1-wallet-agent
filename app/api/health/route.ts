@@ -50,7 +50,7 @@ async function checkAnthropic(): Promise<DepStatus> {
     await generateText({
       model: anthropic('claude-haiku-4-5-20251001'),
       prompt: 'Reply with the single word: ok',
-      maxTokens: 5,
+      maxOutputTokens: 5,
     });
     return { ok: true, latencyMs: Date.now() - start };
   } catch (err) {
