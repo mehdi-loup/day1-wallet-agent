@@ -193,3 +193,65 @@ Today's `console.log` in the tool captures: query, k, hit count, latency. In pro
 ## Bugs surfaced by evals (note, don't fix yet)
 
 - **`empty-wallet` case fails.** `getMockWalletData` returns mock holdings for *any* address, including `0x000...0`. The agent therefore fabricates a non-empty portfolio instead of reporting "empty wallet." Fix: return empty holdings when address is the zero address, or when Zapper returns null and the address is clearly invalid. Don't remove the mock fallback entirely — it's needed for wallets Zapper doesn't index.
+
+---
+
+# Day 13 Learning Log — Production Prep
+
+## Self-eval questions
+
+Answer these without looking at the code.
+
+### 1. Config vs. secret
+
+Where does the distinction between a config value and a secret live in this codebase, and what fails if a secret is treated as config (or vice versa)? Give a concrete failure mode.
+
+> *(your answer here)*
+
+---
+
+### 2. Hosted Postgres trade-off
+
+Why Supabase and not Neon or Railway Postgres? What's the migration cost if you had to switch in 6 months?
+
+> *(your answer here)*
+
+---
+
+### 3. Health check design
+
+`/api/health` makes live calls to Postgres, pgvector, and Anthropic on every request. What's the cost (latency, $) of each probe? Should this endpoint be cached, rate-limited, or run on a schedule instead of on-demand?
+
+> *(your answer here)*
+
+---
+
+### 4. Failure-mode coverage
+
+Of the three error boundaries (MCP, Postgres, Anthropic 529), which are you least confident handles real load correctly? Why, and what's the cheapest test that would expose the gap?
+
+> *(your answer here)*
+
+---
+
+### 5. Production-readiness honesty
+
+What did you ship without that a real production system would require? Pick the top 3 gaps and rank them by user pain.
+
+> *(your answer here)*
+
+---
+
+## What surprised me
+
+> *(your answer here)*
+
+---
+
+## Open threads (Day 14+)
+
+- [ ] MCP server: deploy as Streamable HTTP on Railway/Fly, point MCPClient at URL instead of spawning child process
+- [ ] Rate limiting: per-IP limiter on `/api/chat` before sharing the URL publicly
+- [ ] Mid-stream 529 boundary: use AI SDK `onError` stream callback to inject terminal error chunk
+- [ ] Langfuse tracing on the raw AI SDK chat route (currently console-only)
+- [ ] Separate Supabase projects for dev vs prod
