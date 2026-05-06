@@ -1,0 +1,11 @@
+node_modules
+packages/*/node_modules
+.next
+.mastra
+.git
+.env*
+*.db
+*.db-shm
+*.db-wal
+evals/
+posts/

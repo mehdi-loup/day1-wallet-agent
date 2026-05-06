@@ -1,3 +1,4 @@
+import '@/lib/env';
 import { streamText, UIMessage, convertToModelMessages, stepCountIs } from 'ai';
 import { anthropic } from '@ai-sdk/anthropic';
 import { getTokenPrice } from '@/lib/tools/price';
@@ -46,14 +47,21 @@ export async function POST(req: Request) {
   try {
     const { messages }: { messages: UIMessage[] } = await req.json();
 
-    // Fetch MCP tools once per request — the MCPClient singleton reuses the
-    // underlying child process, so this is a cheap in-memory lookup after boot.
-    const mcpTools = await zapperMCP.listTools();
+    // MCP error boundary: if the Zapper server is unavailable (binary absent on Vercel,
+    // cold-start process death, build environment), degrade to getTokenPrice + searchCorpus
+    // rather than failing the whole request. The model still answers non-wallet questions.
+    const mcpTools = await zapperMCP.listTools().catch((err: unknown) => {
+      console.error('[chat] MCP unavailable, proceeding without Zapper tools:', err instanceof Error ? err.message : err);
+      return {};
+    });
 
     const result = streamText({
       model: anthropic('claude-haiku-4-5-20251001'),
       system: SYSTEM_PROMPT,
       messages: await convertToModelMessages(messages),
+      // Cap output at 1024 tokens per step. Haiku default is 8192; without a cap a
+      // 6-step loop could emit 49K output tokens — ~$0.20/request at HN-scale traffic.
+      maxTokens: 1024,
       tools: { getTokenPrice, searchCorpus, ...mcpTools },
       // OR semantics: any one condition firing stops the loop.
       // stepCountIs(6): hard ceiling — 6 gives room for a portfolio query + a few
@@ -81,7 +89,22 @@ export async function POST(req: Request) {
 
     return result.toUIMessageStreamResponse();
   } catch (err) {
+    const status = (err as { status?: number; statusCode?: number })?.status
+      ?? (err as { status?: number; statusCode?: number })?.statusCode;
+
+    // Anthropic 529: service temporarily overloaded. Streaming makes pre-flight retry
+    // impractical — surface a clear message so the user knows to retry rather than
+    // assuming their message was lost.
+    if (status === 529 || status === 503) {
+      console.error('[chat] Anthropic overloaded (529), surfacing to user');
+      return new Response(
+        JSON.stringify({ error: 'The AI service is temporarily overloaded. Please try again in a moment.' }),
+        { status: 503, headers: { 'Content-Type': 'application/json' } },
+      );
+    }
+
     const message = err instanceof Error ? err.message : 'Internal server error';
+    console.error('[chat] unhandled error:', message);
     return new Response(JSON.stringify({ error: message }), {
       status: 500,
       headers: { 'Content-Type': 'application/json' },

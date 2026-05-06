@@ -21,10 +21,10 @@ const anthropicProvider = createAnthropic({
   baseURL: 'https://api.anthropic.com/v1',
 });
 
-// Top-level await: the MCPClient connects lazily on first listTools() call.
-// This module is async from the perspective of any importer — Next.js App Router
-// and Mastra's bundler both support this in server-side module scope.
-const mcpTools = await zapperMCP.listTools();
+// MCP tools are optional — if the server binary is absent (Docker build, Vercel) the
+// agent still works with getTokenPrice only. Failures here are caught at request time
+// in the chat route; this guards the module-level import from crashing next build.
+const mcpTools = await zapperMCP.listTools().catch(() => ({}));
 
 export const portfolioAgent = new Agent({
   id: 'portfolio-agent',
