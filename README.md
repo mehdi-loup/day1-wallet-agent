@@ -197,3 +197,16 @@ Runs 10 hand-curated cases and prints a pass/fail summary. Exits non-zero on any
 - Production input distribution (10 cases miss the long tail)
 - Latency regression (evals measure correctness, not speed — use traces for that)
 - RAG-specific failures (Day 11)
+
+## Evaluation (Day 15+)
+
+The Day 7 and Day 12 eval cases have been ported to **[day15-evals](https://github.com/mehdiloup/day15-evals)** — a standalone Python eval repo using [Inspect AI](https://inspect.aisi.org.uk) (UK AISI). It runs both suites against the deployed URL as a black-box HTTP API.
+
+```bash
+# clone day15-evals, then:
+uv run inspect eval evals/wallet_agent.py --model anthropic/claude-haiku-4-5-20251001 --log-dir logs/
+uv run inspect eval evals/agentic_rag.py --model anthropic/claude-haiku-4-5-20251001 --log-dir logs/
+uv run inspect view logs/
+```
+
+Latest run (2026-05-08): wallet_agent 8/8 · agentic_rag routing 6/6 · agentic_rag faithfulness 6/6.
