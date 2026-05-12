@@ -1,0 +1,155 @@
+name: Agent Eval Suite
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      agent_url:
+        description: "Override the agent URL (default: production)"
+        required: false
+        default: ""
+
+# Test against the deployed agent. On PRs this is the production URL —
+# the rehearsal path is: push regression to main, Vercel deploys, this fails.
+# For manual overrides (e.g. preview URLs) use workflow_dispatch with agent_url.
+
+jobs:
+  eval:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Clone eval repo
+        uses: actions/checkout@v4
+        with:
+          repository: mehdi-loup/day15-evals
+          path: evals
+
+      - uses: astral-sh/setup-uv@v3
+        with:
+          version: "latest"
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install eval dependencies
+        working-directory: evals
+        run: uv sync
+
+      - name: Patch agent URL (if override supplied)
+        if: ${{ github.event.inputs.agent_url != '' }}
+        working-directory: evals
+        env:
+          OVERRIDE_URL: ${{ github.event.inputs.agent_url }}
+        run: |
+          sed -i "s|AGENT_URL = .*|AGENT_URL = \"${OVERRIDE_URL}\"|" evals/solver.py
+
+      - name: Run wallet_agent eval
+        working-directory: evals
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: uv run inspect eval evals/wallet_agent.py --model anthropic/claude-haiku-4-5-20251001 --log-dir logs/
+
+      - name: Run agentic_rag eval
+        working-directory: evals
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: uv run inspect eval evals/agentic_rag.py --model anthropic/claude-haiku-4-5-20251001 --log-dir logs/
+
+      - name: Run combined_routing eval
+        working-directory: evals
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: uv run inspect eval evals/combined_routing.py --model anthropic/claude-haiku-4-5-20251001 --log-dir logs/
+
+      - name: Check accuracy and latency thresholds
+        working-directory: evals
+        run: |
+          uv run python - <<'PYEOF'
+          import glob, json, subprocess, sys
+          from collections import defaultdict
+
+          ACCURACY_THRESHOLDS = {
+              "wallet-agent":     {"tool_routing_scorer": 1.00},
+              "agentic-rag":      {"tool_routing_scorer": 1.00, "faithfulness_scorer": 0.83},
+              "combined-routing": {"routing_scorer_v2": 1.00, "faithfulness_scorer": 1.00},
+          }
+          P50_BUDGETS = {
+              "wallet-agent":     8000,
+              "agentic-rag":      15000,
+              "combined-routing": 20000,
+          }
+
+          def load_log(task_slug):
+              pattern = f"logs/*{task_slug}*.eval"
+              files = sorted(glob.glob(pattern))
+              if not files:
+                  return None
+              log_file = files[-1]
+              raw = subprocess.check_output(
+                  ["uv", "run", "inspect", "log", "dump", log_file],
+                  stderr=subprocess.DEVNULL,
+              )
+              return json.loads(raw)
+
+          failed = False
+
+          for task_slug in ["wallet-agent", "agentic-rag", "combined-routing"]:
+              data = load_log(task_slug)
+              if data is None:
+                  print(f"FAIL: no log file found for {task_slug}")
+                  failed = True
+                  continue
+
+              samples = data.get("samples", [])
+              scorer_verdicts = defaultdict(list)
+              latency_values = []
+
+              for s in samples:
+                  for scorer_name, score_data in s.get("scores", {}).items():
+                      if not isinstance(score_data, dict):
+                          continue
+                      val = score_data.get("value")
+                      if scorer_name == "latency_scorer":
+                          if isinstance(val, (int, float)):
+                              latency_values.append(float(val))
+                      else:
+                          scorer_verdicts[scorer_name].append(val in ("C", 1, 1.0, True))
+
+              for scorer_name, threshold in ACCURACY_THRESHOLDS.get(task_slug, {}).items():
+                  verdicts = scorer_verdicts.get(scorer_name)
+                  if not verdicts:
+                      print(f"FAIL: {task_slug}/{scorer_name} — no results found")
+                      failed = True
+                      continue
+                  acc = sum(verdicts) / len(verdicts)
+                  if acc < threshold:
+                      print(f"FAIL: {task_slug}/{scorer_name} accuracy={acc:.3f} < threshold={threshold:.3f}")
+                      failed = True
+                  else:
+                      print(f"PASS: {task_slug}/{scorer_name} accuracy={acc:.3f}")
+
+              budget = P50_BUDGETS.get(task_slug)
+              if latency_values and budget:
+                  p50 = sorted(latency_values)[len(latency_values) // 2]
+                  p99 = sorted(latency_values)[-1]
+                  if p50 > budget:
+                      print(f"FAIL: {task_slug} p50={p50:.0f}ms exceeds budget {budget}ms (p99={p99:.0f}ms, informational)")
+                      failed = True
+                  else:
+                      print(f"PASS: {task_slug} p50={p50:.0f}ms <= {budget}ms (p99={p99:.0f}ms, informational)")
+
+          sys.exit(1 if failed else 0)
+          PYEOF
+
+      - name: Upload eval logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: eval-logs
+          path: evals/logs/
+          retention-days: 30
