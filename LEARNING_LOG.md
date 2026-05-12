@@ -546,7 +546,19 @@ The solver threads the full message history between turns. Turn 1 sends `[{role:
 
 **5. What did the failure rehearsal show?**
 
-The regression: renamed the tool registration key from `getTokenPrice` to `getTokenPriceV2` in the tools object. The model still calls the price tool, but under the wrong name — the routing scorer's `includes("getTokenPrice")` check fails. Used `workflow_dispatch` with the Vercel preview URL to run evals against the broken branch without deploying to production. This confirmed: (a) the eval CI catches wrong tool names, (b) the preview URL override works for pre-merge regression detection.
+The regression: renamed the tool registration key from `getTokenPrice` → `getTokenPriceV2` in the tools object. The model still calls the price tool, but under the wrong name — the routing scorer's name-match check fails. Pushed directly to main (Vercel preview URL has 401 auth on Hobby plan, can't be used for external eval runners without a bypass token).
+
+**The regression was caught** — but in `combined_routing`, not `wallet_agent`:
+- `wallet_agent` ran first (~30s in): Vercel hadn't deployed the regression yet → PASS
+- `combined_routing` ran last (~6 min in): regression was live → FAIL (0.333 < 0.670 threshold)
+
+**The revert push also triggered a split run** — the intermediate CI run hit the deployment window from the other direction:
+- `wallet_agent` still saw the regression → FAIL  
+- `combined_routing` saw the fix (fully deployed by then) → PASS
+
+**The clean signal** came from `workflow_dispatch` triggered after production was confirmed fixed (curl verified `toolName: getTokenPrice`). That run was green across all three tasks in under 3 minutes.
+
+**Key takeaway:** The eval suite takes 10+ minutes; Vercel deploys in ~2-3 minutes. Any push-triggered CI run will have a deployment race window. This isn't a problem for regression detection (different tasks catch regressions at different deployment phases), but it does mean push-triggered CI will sometimes show split results that are hard to interpret. `workflow_dispatch` after a known-stable deploy is the clean verification path.
 
 ---
 
@@ -564,6 +576,12 @@ Cold Voyage AI + Supabase can take >120s. The `rag-ungrounded-fake-path` case ti
 **4. Faithfulness rubric over-specified forbidden content.**
 `ambiguous-price-impact` rubric said "must NOT state a specific numeric slippage percentage." The agent said "typical slippage 0.1–0.5%" as DeFi background knowledge — the grader flagged this as forbidden. Rubric was too strict: it should forbid *computed* slippage for *this specific swap*, not background education. Fix: added "General DeFi ranges cited as background knowledge are acceptable."
 
+**5. Vercel deployment window creates split CI results.**
+The eval suite takes 10+ minutes. Vercel deploys in ~2-3 minutes. A push-triggered CI run starts before Vercel finishes, so early tasks (wallet_agent, ~30s) run against the previous build while later tasks (combined_routing, ~6+ min) run against the new build. The failure rehearsal showed this clearly: the regression push was caught in combined_routing (not wallet_agent), and the revert push showed the mirror image. Latent bugs that affect early tasks may not be detected until the next CI run where Vercel is already warmed. Mitigation: after any push, wait for Vercel deployment to complete before relying on CI results; `workflow_dispatch` on a confirmed-deployed commit is the clean signal.
+
+**6. Vercel Hobby preview URL requires auth.**
+`workflow_dispatch` with a preview URL override fails with 401 — Vercel Hobby plan puts preview deployments behind team authentication. The eval runner is an external GitHub Actions runner with no session cookie. Fix options: (a) use production URL (main branch only), (b) upgrade to Pro for `--public` previews, (c) use Vercel's Deployment Protection bypass secret header. On Hobby, (a) is the only free path.
+
 ---
 
 ### CI threshold reasoning (final after 5+ calibration runs)
@@ -577,8 +595,6 @@ Cold Voyage AI + Supabase can take >120s. The `rag-ungrounded-fake-path` case ti
 | wallet_agent routing | 1.00 | Deterministic; stable across all runs |
 | agentic_rag routing | 1.00 | Deterministic; stable across all runs |
 | combined_routing routing | 0.67 | Floor at 4/6; `ambiguous-price-impact` flakes |
-| wallet_agent p50 | < 30,000ms | Cold Lambda can hit 15s; 30s budget avoids false-positive while catching hangs |
-| agentic_rag p50 | < 30,000ms | Same reasoning |
 
 **What got downgraded to informational-only (collected but not CI-blocking):**
 
