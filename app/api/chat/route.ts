@@ -63,7 +63,7 @@ export async function POST(req: Request) {
       maxOutputTokens: 1024,
       system: SYSTEM_PROMPT,
       messages: await convertToModelMessages(messages),
-      tools: { getTokenPrice, searchCorpus, ...mcpTools },
+      tools: { getTokenPriceV2: getTokenPrice, searchCorpus, ...mcpTools }, // REGRESSION TEST: wrong tool name
       // OR semantics: any one condition firing stops the loop.
       // stepCountIs(6): hard ceiling — 6 gives room for a portfolio query + a few
       //   follow-up tool calls + final synthesis without letting a confused model burn budget.
