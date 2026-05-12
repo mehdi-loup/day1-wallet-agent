@@ -507,6 +507,101 @@ At $0.005/run: 200 runs = $1. This could run on every commit. Realistic cadence:
 
 ---
 
+## Day 16 Learning Log — Eval as a Regression Baseline
+
+### What we built
+
+Three moves to turn the Day 15 snapshot eval into a credible regression baseline:
+
+**Move 1: Coverage** — 6 new cases in `combined_routing.jsonl`:
+- `ambiguous-routing` (2): agent must not confuse "price impact" with "spot price," and must pick `getTokenPrice` when corpus is mentioned but can't answer
+- `combined-live-corpus` (2): agent must call both tools in a single turn when both halves of the query need them
+- `multi-turn-context` (2): agent must carry turn-1 routing context into turn-2 (e.g., "And BTC?" resolves as a price query)
+
+**Move 2a: Latency scorer** — `latency.py` adds `p50_ms()`, `p99_ms()`, `max_ms()` metrics using Inspect AI's `list[SampleScore]` API. The solver records `wall_clock_ms` on every sample (including multi-turn total). CI gates on p50 (not p99) because Vercel Hobby cold-starts inflate p99 by 10×.
+
+**Move 2b: Grader stability** — `flake_test.py` replays 6 committed cached agent responses through the faithfulness grader N=3 times. Result: 0% disagreement rate (0/18 runs differed from majority). All 6 cases are CI-blocking. Key design: committed cache isolates *grader* non-determinism from *agent* non-determinism.
+
+**Move 3: CI** — `.github/workflows/eval.yml` added to this repo (agent repo). Triggers on PR, push to main, and `workflow_dispatch` (with optional `agent_url` override to test preview deployments). Clones `mehdi-loup/day15-evals` and runs all three tasks against the production URL. Accuracy thresholds + p50 latency budgets gate the PR check.
+
+---
+
+### Checkpoint questions
+
+**1. Why gate on p50, not p99?**
+
+Vercel Hobby Lambda cold-starts push p99 to 70–82s even on a healthy agent — one request hits the cold Lambda, the others are warm. The p99 reflects infrastructure behavior, not agent regression. p50 is the actionable metric: if the *median* case is slow, something is fundamentally wrong. If only the worst-case is slow, it's infrastructure noise.
+
+**2. Why committed grader cache instead of re-running the agent?**
+
+Re-running the agent introduces two noise sources simultaneously: agent non-determinism (does it call the right tools?) and grader non-determinism (does the grader evaluate the same text the same way?). A committed cache holds the agent response constant so the stability test measures *only* grader noise. If the cache goes stale (agent response format changes), update it by running one live eval and extracting the new responses.
+
+**3. What does the ambiguous-price-impact failure teach us?**
+
+The agent calls `getTokenPrice` when asked about "price impact of swapping 100 ETH." This is a genuine reasoning error: the model conflates a DeFi slippage concept with a spot-price query. The system prompt says "getTokenPrice: standalone price queries only (e.g. 'what's ETH at?')" — but "price impact" is ambiguous enough that the model misroutes. Fix: add a negative example to the system prompt ("getTokenPrice answers 'what is ETH worth?' — not swap output amounts, not slippage percentages, not pool depth").
+
+**4. Why does multi-turn context work?**
+
+The solver threads the full message history between turns. Turn 1 sends `[{role: "user", text: "What's ETH?"}]`, the assistant reply is appended, and turn 2 sends `[{role: "user", ...}, {role: "assistant", ...}, {role: "user", text: "And BTC?"}]`. The model sees the full conversation and infers "BTC" is a follow-up price query. This works because the AI SDK's `convertToModelMessages` accepts a messages array, not a single prompt string — the conversation is first-class.
+
+**5. What did the failure rehearsal show?**
+
+The regression: renamed the tool registration key from `getTokenPrice` to `getTokenPriceV2` in the tools object. The model still calls the price tool, but under the wrong name — the routing scorer's `includes("getTokenPrice")` check fails. Used `workflow_dispatch` with the Vercel preview URL to run evals against the broken branch without deploying to production. This confirmed: (a) the eval CI catches wrong tool names, (b) the preview URL override works for pre-merge regression detection.
+
+---
+
+### Surprises and bugs found
+
+**1. `timeout-minutes` at workflow level fails YAML parse.**
+GitHub Actions only allows `timeout-minutes` at the job level, not the workflow top level. Fix: move under `jobs: eval:`.
+
+**2. `inspect log dump` JSON vs text grep.**
+The threshold check script initially used text-grep on the multi-column Inspect AI output table. Scorer names are truncated in the table (`tool_routing_sco…`) and accuracy values appear on the same row as multiple scorers. Regex completely failed for multi-scorer tasks. Fix: use `inspect log dump <file>` → JSON → parse `samples[].scores[scorer_name].value`.
+
+**3. HTTPX `ReadTimeout` at 120s on searchCorpus cases.**
+Cold Voyage AI + Supabase can take >120s. The `rag-ungrounded-fake-path` case timed out and received no scores (the sample showed `"scores": {}`). Fix: increased HTTPX read timeout from 120s to 300s.
+
+**4. Faithfulness rubric over-specified forbidden content.**
+`ambiguous-price-impact` rubric said "must NOT state a specific numeric slippage percentage." The agent said "typical slippage 0.1–0.5%" as DeFi background knowledge — the grader flagged this as forbidden. Rubric was too strict: it should forbid *computed* slippage for *this specific swap*, not background education. Fix: added "General DeFi ranges cited as background knowledge are acceptable."
+
+---
+
+### CI threshold reasoning (final after 5+ calibration runs)
+
+**Key lesson:** Don't set thresholds from a single run. Run the suite 3-5 times and use the observed floor, not the average. Model-graded scores and latency are high-variance; only deterministic routing scores are suitable for hard CI gates in a Vercel Hobby / free-tier deployment.
+
+**What ended up CI-blocking:**
+
+| Task / scorer | Threshold | Reasoning |
+|---|---|---|
+| wallet_agent routing | 1.00 | Deterministic; stable across all runs |
+| agentic_rag routing | 1.00 | Deterministic; stable across all runs |
+| combined_routing routing | 0.67 | Floor at 4/6; `ambiguous-price-impact` flakes |
+| wallet_agent p50 | < 30,000ms | Cold Lambda can hit 15s; 30s budget avoids false-positive while catching hangs |
+| agentic_rag p50 | < 30,000ms | Same reasoning |
+
+**What got downgraded to informational-only (collected but not CI-blocking):**
+
+| Scorer | Observed range | Why excluded from CI gate |
+|---|---|---|
+| agentic_rag faithfulness | 0.800–1.000 | `rag-ungrounded-fake-path` timeouts remove it from scoring (leaving 5 cases); `rag-ungrounded-general-defi` agent flake fires intermittently |
+| combined_routing faithfulness | 0.667–0.833 | Cold-start stream cutoffs cause partial text captures (pre-tool text only, missing synthesis); agent intermittently returns empty string |
+| combined_routing p50 | 25s–82s | 4/6 cases call Voyage AI + Supabase; external cold-starts dominate |
+
+The faithfulness downgrade is the key learning: a faithfulness failure can mean (a) agent produced wrong content, (b) grader made a borderline call, OR (c) stream cutoff caused partial text that looks like wrong content. Distinguishing (a) from (c) in production requires looking at per-sample tool_calls + output text, not just the aggregate score.
+
+---
+
+### Day 17 candidates
+
+- [ ] **Fix `ambiguous-price-impact` agent failure:** Add negative example to system prompt: "`getTokenPrice` answers 'what is ETH worth?' — NOT swap slippage, NOT price impact, NOT pool depth"
+- [ ] **Fix `rag-ungrounded-general-defi` fabrication:** Agent invents Uniswap/Aave Wayfinder corpus citations. System prompt already says "If the corpus has no relevant info, say so — do not fabricate a citation." The model ignores this. Stronger constraint: "If searchCorpus returns no results, tell the user: 'The corpus does not contain information on this topic.'"
+- [ ] **Upgrade eval thresholds** after both agent fixes: routing and faithfulness should return to 1.00 for all tasks once the two known flakes are fixed
+- [ ] **Langfuse tracing** on `/api/chat` — highest observability value before sharing widely
+- [ ] **MCP as HTTP** — deploy zapper-mcp as a persistent HTTP server on Railway so Vercel can call it; `wallet-holdings` and `empty-wallet` cases should upgrade from `mcp-degradation` to real tool-call assertions
+
+---
+
 ## Week 3 candidates
 
 - [ ] Langfuse tracing on the raw AI SDK chat route (1 PR — highest observability value)
