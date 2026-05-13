@@ -627,3 +627,70 @@ The faithfulness downgrade is the key learning: a faithfulness failure can mean 
 - [ ] Separate Supabase projects for dev vs prod
 - [ ] Mid-stream Anthropic 529 boundary (AI SDK `onError` callback)
 - [ ] Corpus growth: ingest more Wayfinder Paths to validate hybrid search signal at >50 paths
+
+---
+
+## Day 17 — 2026-05-13
+
+### Moves completed
+
+**Decision 1: Publication target — standalone polish only.**  
+Read `UKGovernmentBEIS/inspect_evals` CONTRIBUTING.md and last 20 merged PRs. Key finding: they no longer accept new eval code submissions. New evals go through a Register process (external repo pointer). More importantly, their bar is "published by a major AI lab or credible academic group" — an eval over a personal wallet agent does not clear it without significant generalization work. Standalone polish is the honest call, with an upstream Register inquiry as a future Day 18+ option if the repo gains visibility.
+
+**Decision 2: Agent-fix ordering — A (fix before benchmark, 30-min timebox).**  
+Both Day 16 flakes fixed and verified post-deploy:
+- `ambiguous-price-impact`: combined_routing routing 0.833 → 1.000. Root cause: agent conflated DEX slippage with spot price. Fix: explicit exclusion in system prompt + "if asked about price impact, explain you cannot compute on-chain swap simulations."
+- `rag-ungrounded-general-defi`: agentic_rag faithfulness 0.833 → 1.000. Root cause was subtler: the corpus has real LP strategy content (Echelon Prime path). Agent found a partial match, then fabricated Uniswap V3 IL mechanics *on top of it*, attributed to the corpus. First fix (zero-results phrase) didn't work because results weren't zero. Second fix: explicit scope exclusion — general DeFi mechanics (IL, AMM math) are not corpus topics, answer from training knowledge without calling searchCorpus.
+
+**Move 2: Cross-grader benchmark — Haiku vs. Sonnet 4.6.**  
+12 faithfulness verdicts, 100% agreement. Pre-run priors: Haiku would be more lenient and more flaky. Both wrong. The explanation: precise rubrics (exact forbidden phrases, exact required attributions) remove model-size variance. When rubrics are unambiguous, even Haiku reads them correctly. CI conclusion: Haiku is the right grader — same quality for these rubrics at ~10× lower cost. The 0.833 vs 1.000 routing difference between grader runs was agent-side non-determinism, not grader variance (routing scorer is deterministic).
+
+**Move 3: Deferred.**  
+Cross-agent-model benchmark (Haiku/Sonnet/Opus as agent LLM via `?model=` query param) deferred to Day 18. The grader benchmark finding is the stronger publication story. Same-vendor model-size comparison would add cost without a new methodological insight given we already have the grader-axis finding.
+
+**Move 4: Publication docs.**  
+- README rewrite: load-bearing first sentence mentioning cross-grader benchmark, TL;DR table, 5-line quickstart, cross-grader findings section, agent-fix summary, citation block.
+- `METHODOLOGY.md` (new): why these cases (4 failure modes), why two scorer types, why Haiku grader (benchmark-validated), dataset size justification, reproducibility checklist.
+- `LIMITATIONS.md` (new): statistical coverage, query distribution, adversarial robustness, latency under load, MCP gaps, cross-vendor exclusion, grader variance bound, eval-as-training-signal risk.
+
+Total Day 17 eval cost: ~$0.056 (well under $1.00 ceiling).
+
+---
+
+### Self-evaluation
+
+**1. Publication-path defense.**  
+Chose standalone polish. Evidence: `inspect_evals` CONTRIBUTING.md explicitly says "We no longer accept code submissions for new eval implementations." Even if they did, their credibility bar ("published by a major AI lab or credible academic group") excludes an eval over a personal wallet agent. The Register path (external pointer) is the realistic future step, but it requires the repo to have external visibility first. If a reviewer pushed back ("why didn't you open a PR?"), the answer is: I read their contributing guide before deciding, and the PR path was literally closed. The standalone polish produces a shareable artifact regardless.
+
+**2. Cross-model interpretation — most interesting disagreement.**  
+There were no disagreements. All 12 faithfulness verdicts matched between Haiku and Sonnet. The informative non-result: 100% agreement means the rubrics are precise enough to remove model-size variance — it's a validation of rubric design, not a failure of the benchmark to surface anything. If I were to resolve this by making the cases more interesting, I'd add a borderline case: "response that partially cites real corpus content but also contains fabrication." That case would likely break the 100% agreement and reveal Sonnet's superior ability to catch nuanced attribution failures.
+
+**3. Agent-fix tradeoff.**  
+Fixed before, documented before-fix scores in RESULTS.md. Published scores are 1.000/1.000 with a clearly labeled "pre-fix baseline" row. The story: "the eval found both flakes, the agent was patched, the suite confirmed the fixes." This is the right sequence — it demonstrates that the eval suite *works as a regression gate*, not just that the agent scores well. If I had published with-flakes numbers, the headline would be "my eval shows my agent fails 1/6 cases" which is weaker than "my eval caught two bugs, I fixed them, here's the before/after."
+
+**4. Reproducibility honesty.**  
+The quickstart in README was not freshly tested from a clean directory today — I ran it from within the existing venv. `uv sync` was previously verified to work (Day 15). The `.env.example` is present. The actual freshness concern: the cross-grader benchmark script was not run in CI, only locally. A true fresh-clone test would need to confirm the `GRADER_MODEL` env var flows correctly through `cross_grader_benchmark.sh`. This is a gap: the script works, but it's not CI-tested, so a user following the README could hit subtle issues (e.g., `uv` not finding the script's relative path if run from the wrong directory). Day 18 action: test from a fresh clone and fix anything that breaks.
+
+**5. Updated load-bearing claim.**  
+Day 16: *"The suite enforces regressions."*  
+Day 17: *"The suite enforces regressions AND the grader is validated — 100% Haiku/Sonnet faithfulness agreement on precise rubrics, with pre/post agent-fix evidence that the enforcement actually works."*  
+Is the suite evidence for that claim? Yes on the grader validation (the benchmark ran and produced the 100% figure). Yes on the "enforcement works" claim (the two Day 17 agent fixes were caught by the suite and confirmed post-patch). The asterisk: the agent-fix loop creates eval-as-training-signal risk (documented in LIMITATIONS.md). The suite is a stronger regression gate than it is an independent probe.
+
+---
+
+### Day 18 handoff
+
+**Open threads:**
+- Cross-agent-model benchmark (`?model=` query param on `/api/chat`, Haiku/Sonnet/Opus comparison) — deferred from Day 17. Good Day 18 warm-up: ~30min implementation + ~30min run + results table.
+- Fresh-clone quickstart test — README claims it works in under 10 minutes. Verify this from a clean directory before citing the repo in applications.
+- GitHub repo rename: `day15-evals` → `agentic-rag-evals` or `wallet-agent-evals`. Requires updating the CI badge URL in README, the cross-repo reference in `day1-wallet-agent/.github/workflows/eval.yml`, and any other internal links.
+
+**Is the eval suite ready to be the lead link in job applications?**  
+*Yes, with one caveat.* The README now reads as a public artifact (not a sprint log). The cross-grader benchmark adds a data point a recruiter can point to. The limitations section is honest. The quickstart is testable. The caveat: the repo name `day15-evals` is a sprint artifact name; it should be renamed before putting it in a cover letter. If Day 18 includes the rename + fresh-clone verification, the suite is ready.
+
+**Day 18 nominal focus (per plan):** demo videos. Three 90-second walkthroughs:
+1. Wallet agent: show a live portfolio query + price lookup + the stopWhen composing in action
+2. RAG: ask a grounded Wayfinder path question, then an ungrounded one — show the attribution vs. graceful decline
+3. Eval suite: show the CI badge, run `wallet_agent.py` live, show the cross-grader benchmark table — narrate "the eval found two bugs, here's the before/after"
+
+The Day 17 artifact (README first sentence + RESULTS.md cross-grader table) is what the video opens with and points the viewer to. Make sure the repo is renamed and the live demo URL is stable before recording.
