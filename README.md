@@ -6,11 +6,13 @@ https://github.com/user-attachments/assets/e6317eb3-11a3-41a2-bd7b-a6f0657342f6
 
 
 
-# Wallet Agent — Week 2 (Days 1–14)
+# Wallet Agent — deployed TypeScript AI agent
 
-**Live demo: https://day1-wallet-agent.vercel.app** | [Blog post](BLOG_WEEK2.md) | [Production gap list](PRODUCTION.md)
+A deployed TypeScript AI agent (Next.js 15 + Vercel AI SDK) that routes between a pgvector RAG corpus and live price data, with an explicit scope-refusal pattern for queries it can't safely compute. Local-only MCP for Zapper wallet data; production MCP-over-HTTP is on the roadmap.
 
-A TypeScript agent that grounds itself via MCP-routed live wallet data and pgvector RAG. Ask it about a crypto wallet or a Wayfinder AI workflow path — it routes to the right source and cites what it retrieved. Built across a 21-day AI engineering sprint using Vercel AI SDK, Mastra, Anthropic Claude, Voyage AI embeddings, Supabase pgvector, and Langfuse observability.
+**[Live demo](https://day1-wallet-agent.vercel.app)** · [Blog post](BLOG_WEEK2.md) · [Production gap list](PRODUCTION.md) · Behavior regression-tested by a separate Inspect AI eval suite (link TBD after rename).
+
+**Stack:** Vercel AI SDK · Mastra · Anthropic Claude · Voyage AI embeddings · Supabase pgvector · Langfuse · Inspect AI
 
 ## Architecture (Day 12+)
 
