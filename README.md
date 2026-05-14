@@ -1,5 +1,11 @@
 
 
+https://github.com/user-attachments/assets/e6317eb3-11a3-41a2-bd7b-a6f0657342f6
+
+
+
+
+
 # Wallet Agent — Week 2 (Days 1–14)
 
 **Live demo: https://day1-wallet-agent.vercel.app** | [Blog post](BLOG_WEEK2.md) | [Production gap list](PRODUCTION.md)
