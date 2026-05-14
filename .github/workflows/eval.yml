@@ -25,7 +25,7 @@ jobs:
       - name: Clone eval repo
         uses: actions/checkout@v4
         with:
-          repository: mehdi-loup/day15-evals
+          repository: mehdi-loup/agentic-rag-evals
           path: evals
 
       - uses: astral-sh/setup-uv@v3

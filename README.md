@@ -10,7 +10,7 @@ https://github.com/user-attachments/assets/e6317eb3-11a3-41a2-bd7b-a6f0657342f6
 
 A deployed TypeScript AI agent (Next.js 15 + Vercel AI SDK) that routes between a pgvector RAG corpus and live price data, with an explicit scope-refusal pattern for queries it can't safely compute. Local-only MCP for Zapper wallet data; production MCP-over-HTTP is on the roadmap.
 
-**[Live demo](https://day1-wallet-agent.vercel.app)** · [Blog post](BLOG_WEEK2.md) · [Production gap list](PRODUCTION.md) · Behavior regression-tested by a separate Inspect AI eval suite (link TBD after rename).
+**[Live demo](https://day1-wallet-agent.vercel.app)** · [Blog post](BLOG_WEEK2.md) · [Production gap list](PRODUCTION.md) · Behavior regression-tested by [agentic-rag-evals](https://github.com/mehdi-loup/agentic-rag-evals) (Inspect AI, CI-gated).
 
 **Stack:** Vercel AI SDK · Mastra · Anthropic Claude · Voyage AI embeddings · Supabase pgvector · Langfuse · Inspect AI
 
@@ -210,10 +210,10 @@ Runs 10 hand-curated cases and prints a pass/fail summary. Exits non-zero on any
 
 ## Evaluation (Day 15+)
 
-The Day 7 and Day 12 eval cases have been ported to **[day15-evals](https://github.com/mehdiloup/day15-evals)** — a standalone Python eval repo using [Inspect AI](https://inspect.aisi.org.uk) (UK AISI). It runs both suites against the deployed URL as a black-box HTTP API.
+The Day 7 and Day 12 eval cases have been ported to **[agentic-rag-evals](https://github.com/mehdi-loup/agentic-rag-evals)** — a standalone Python eval repo using [Inspect AI](https://inspect.aisi.org.uk) (UK AISI). It runs both suites against the deployed URL as a black-box HTTP API.
 
 ```bash
-# clone day15-evals, then:
+# clone agentic-rag-evals, then:
 uv run inspect eval evals/wallet_agent.py --model anthropic/claude-haiku-4-5-20251001 --log-dir logs/
 uv run inspect eval evals/agentic_rag.py --model anthropic/claude-haiku-4-5-20251001 --log-dir logs/
 uv run inspect view logs/
