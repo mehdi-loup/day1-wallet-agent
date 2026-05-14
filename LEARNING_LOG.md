@@ -694,3 +694,86 @@ Is the suite evidence for that claim? Yes on the grader validation (the benchmar
 3. Eval suite: show the CI badge, run `wallet_agent.py` live, show the cross-grader benchmark table — narrate "the eval found two bugs, here's the before/after"
 
 The Day 17 artifact (README first sentence + RESULTS.md cross-grader table) is what the video opens with and points the viewer to. Make sure the repo is renamed and the live demo URL is stable before recording.
+
+---
+
+## Day 18 — 2026-05-14
+
+### Moves completed
+
+**Move 0: Pre-flight.** Locked recording tool (macOS Cmd-Shift-5 + Quicktime trim, no editing software) and the script template (hook ≤15 words / demo with honest moment / payoff ≤15 words). Anthropic-only stack (no third-party voiceover / editing tools).
+
+**Move 1: Wallet-agent demo.** Recorded against the deployed Vercel URL (Option X), not localhost. Decision driver: a recruiter clicking the live URL after watching the video would see MCP-degradation and wonder why the video didn't show it — better to match the demo to the deployed surface. **Honest moment: price-impact refusal**, not MCP degradation. Rationale: the refusal is an agent behavior (system-prompt rule), not a deployment artifact — stronger credibility signal. Verified the refusal phrasing live before recording ("I cannot compute price impact or swap slippage. That requires on-chain swap simulation..."). Single take, embedded in `day1-wallet-agent/README.md` via GitHub web UI drag-drop (`user-attachments/assets/e6317eb3-...`). README first paragraph rewritten role-targeted, dropping "Week 2 (Days 1–14)" framing.
+
+**Move 2: RAG demo.** Recorded against the deployed agent (no separate `day11-rag` UI exists). Two queries: grounded ("Conditional Router Reference path") to show `searchCorpus` attribution; out-of-corpus ("Email-Triage path") to show the canonical refusal. Skipped the terminal `ls corpus/` cold-open mid-prep — pure chat-UI single-surface demo, tighter. Key finding before recording: the planned "EIP-4337" refusal query wouldn't work because the Day 17 system prompt routes token-standard questions to training knowledge without calling `searchCorpus`. Had to pick a *path-shaped* query that's semantically far from any corpus content. README rewrite staged for the new `wayfinder-paths-rag` repo (see scope changes below); video upload to that README still pending at EOD.
+
+**Move 3: Eval demo.** Recorded inside the renamed `agentic-rag-evals` repo (was `day15-evals`). Pre-run an `inspect view` log before recording so the dashboard step had a real trace to display. Caught a real bug during pre-run: `uv run inspect eval` doesn't auto-load `.env`, threw an Anthropic auth error. Fix: `set -a && source .env && set +a && uv run inspect eval ...`. Honest moment: LIMITATIONS section ("descriptive at this scale, not statistical").
+
+**Scope changes (against the prompt's plan):**
+
+- **Move 0 grew into a publishing sprint.** `day11-rag` had never been initialized as a git repo. Created `mehdi-loup/wayfinder-paths-rag` (non-sprint name, per consistency with `agentic-rag-evals`). 5 min `gitignore`/secret pre-flight + `git init` + `gh repo create --push`.
+- **Renamed `day15-evals` → `agentic-rag-evals`** on GitHub. Updated local remote URL, README badge + clone refs, and the cross-repo checkout target in `day1-wallet-agent/.github/workflows/eval.yml`.
+- **Move 4 (GitHub profile README) skipped.** User decision. Implication: cover letters must point directly at the three artifact repos; the profile page itself shows only the default GitHub repo listing without a positioning sentence. Survivable but suboptimal — flagged in handoff.
+- **Move 5 (cross-linking pass) skipped.** User decision. Only one cross-link exists today: `day1-wallet-agent` README links to `agentic-rag-evals`. The reverse links (`agentic-rag-evals` → wallet-agent, `wayfinder-paths-rag` → wallet-agent, both → each other) are unstarted. Flagged in handoff.
+
+### Surprises / bugs found during recording
+
+- **EIP-4337 doesn't trigger searchCorpus refusal.** Day 17 system-prompt fix routes "general DeFi mechanics" (including token standards) to training knowledge. Solution: use a *path-shaped* query (Email-Triage) that triggers `searchCorpus` and returns zero hits.
+- **`inspect view` requires a subcommand.** The Day 17 / Day 16 README quickstart used `uv run inspect view logs/`. Correct invocation is `uv run inspect view start --log-dir logs/`. Not a regression — likely an Inspect AI version bump. Worth a Day 19+ README quickstart audit.
+- **`uv run inspect eval` doesn't auto-load `.env`.** Anthropic auth error if `ANTHROPIC_API_KEY` isn't exported in the shell session. Fix is one-liner (`set -a; source .env; set +a`) but the README quickstart should call this out.
+- **`day11-rag` was never a git repo.** Day 1–13 work all happened in a local-only directory. Wallet-agent referenced `https://github.com/mehdi-loup/day11-rag` as a cross-link — that URL was 404 until today's publishing.
+- **`day15-evals` README had four stale `day15-evals` URL references** post-rename. GitHub auto-redirects, but the canonical URL is cleaner. Fixed.
+
+### Lead-link decision (for next sessions)
+
+**Default lead link: [day1-wallet-agent](https://github.com/mehdi-loup/day1-wallet-agent).** Rationale: it's the *deployed* artifact a recruiter can click and try in 30 seconds without cloning anything. The video at the top of the README answers "what does this do?" in 90 seconds. The other two repos are stronger evidence of *depth* but require more interpretation effort.
+
+Exceptions (per role archetype):
+- **Safety-leaning shop / AI Eng with rigor framing:** lead with [agentic-rag-evals](https://github.com/mehdi-loup/agentic-rag-evals). The CI badge + cross-grader benchmark is the strongest "I know how to evaluate AI" signal.
+- **Crypto product shop (Koinly archetype):** still lead with `day1-wallet-agent` — it's the most crypto-adjacent of the three.
+- **Data-heavy / RAG-leaning role:** lead with [wayfinder-paths-rag](https://github.com/mehdi-loup/wayfinder-paths-rag). The 100% recall@3 + hybrid BM25+vector retrieval is the strongest retrieval-engineering signal.
+
+### Self-evaluation
+
+**1. Lead-link decision — see above.** Default is wallet-agent; two clear exceptions.
+
+**2. Most credible honest moment across the three videos.** *To answer after watching all three together.* The strongest candidates: wallet-agent's price-impact refusal (the agent names `quoteExactInputSingle` as the mechanism it lacks — technical specificity is credibility); RAG's out-of-corpus refusal (canonical phrase plus helpful specificity); eval's LIMITATIONS callout (only credible if delivered as engineering humility, not apology). My prior: wallet-agent's refusal is the strongest because it includes the *useful alternative* the agent can do ("I can fetch spot prices for a rough manual comparison"). That converts a refusal into a scoped offer, which reads stronger than a pure no.
+
+**3. Profile README positioning.** *Skipped — see scope changes.* The implication: when a recruiter clicks the GitHub username from any cover letter, they see the default repo listing. The three artifact repos' first paragraphs have to carry all the positioning weight on their own. Mitigation: pin the three repos so they appear at the top of the default listing.
+
+**4. Recording-vs-editing time split.** *To answer.* Today's hidden cost was the publishing sprint (renaming `day15-evals`, publishing `wayfinder-paths-rag`, fixing cross-links) which the prompt didn't anticipate. If recording was <30% of the day and the rest was git ops + README editing, that's a sign the artifact-stack wasn't as ready going into Day 18 as Day 17's handoff implied.
+
+**5. Recruiter-facing load-bearing sentence (replaces Day 17's load-bearing claim).** Draft:
+
+> *"Three artifacts from a 21-day AI engineering sprint: a deployed TypeScript agent (Vercel AI SDK + MCP + RAG), a measured RAG library (100% recall@3, hybrid BM25+vector), and a CI-enforced Inspect AI eval suite with cross-grader stability data. Each has a 90-second walkthrough."*
+
+That's 49 words. Tight enough to paste into a cover letter. Whether it survives a 5-second scan from a cold recruiter is the real test — book a human read before the Day 21 application push.
+
+### Day 19 handoff
+
+**Open threads (Day 19+ polish list):**
+
+- **Move 4 — GitHub profile README** (`mehdi-loup/mehdi-loup` repo, doesn't exist). Highest-leverage README on the whole sprint. Headline calibration: must read for both Koinly-archetype (senior FE crypto) and AI-shop archetype. Draft v1 staged in conversation but not committed.
+- **Move 5 — cross-linking pass.** Each artifact README needs "Related work" links to the other two. Currently only `day1-wallet-agent` → `agentic-rag-evals` exists.
+- **`koinly_cover_letter.md`** needs the three video URLs inserted (placement only, no rewrite — that's a Day 19 task).
+- **`wayfinder-paths-rag` README — video upload pending.** Same drag-drop flow as wallet-agent. Required before profile README can link to it cleanly.
+- **`agentic-rag-evals` README — video upload pending.**
+- **Local directory renames** (`day11-rag/` → `wayfinder-paths-rag/`, `day15-evals/` → `agentic-rag-evals/`). Cosmetic for terminal screencaps; deferred today. Renaming `day11-rag/` requires updating `day1-wallet-agent/package.json`'s `file:../day11-rag` dependency.
+- **MCP HTTP on Railway** (Day 17 handoff item, deferred again today). Highest-impact upgrade for the wallet-agent demo: a deployed MCP server lets the live URL actually show wallet holdings. Probably a Day 22+ post-sprint weekend project — that's the right scope.
+- **README quickstart audit** for `agentic-rag-evals`: `inspect view` subcommand needs updating (`start --log-dir logs/`), and the `.env`-loading caveat needs a one-liner in the README (or a wrapper script).
+
+**Video URLs (canonical share links):**
+
+- Wallet agent: `https://github.com/user-attachments/assets/e6317eb3-11a3-41a2-bd7b-a6f0657342f6` (live)
+- RAG: *pending upload to `wayfinder-paths-rag/README.md`*
+- Eval: *pending upload to `agentic-rag-evals/README.md`*
+
+**Repos (canonical URLs):**
+
+- [day1-wallet-agent](https://github.com/mehdi-loup/day1-wallet-agent) (live demo: https://day1-wallet-agent.vercel.app)
+- [wayfinder-paths-rag](https://github.com/mehdi-loup/wayfinder-paths-rag) (published today; was `day11-rag` local-only)
+- [agentic-rag-evals](https://github.com/mehdi-loup/agentic-rag-evals) (renamed today; was `day15-evals`)
+
+**Is the artifact stack ready for outreach (Day 20) and applications (Day 21)?**  
+*Mostly yes, with three things that should land before Day 20:* (1) the two pending video uploads, (2) the cross-linking pass, (3) the profile README — *or* a deliberate decision to skip the profile README and pin the three repos on the default profile view. Without these, the artifact stack is *findable* but not *legible-in-5-minutes*. Day 19's CV rewrite should not be the first thing that closes these gaps — CV writing is for Day 19's focus, polish list items are for Day 19's slack time.
+
