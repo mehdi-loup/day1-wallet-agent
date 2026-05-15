@@ -220,3 +220,14 @@ uv run inspect view logs/
 ```
 
 Latest run (2026-05-08): wallet_agent 8/8 · agentic_rag routing 6/6 · agentic_rag faithfulness 6/6.
+
+---
+
+## Related work
+
+This repo is the **application layer** of a three-part stack:
+
+- **[wayfinder-paths-rag](https://github.com/mehdi-loup/wayfinder-paths-rag)** — the retrieval library this agent calls via `searchCorpus`. Installed as a `file:` dependency; powers every grounded answer.
+- **[agentic-rag-evals](https://github.com/mehdi-loup/agentic-rag-evals)** — the Inspect AI suite that black-box-tests this agent's deployed URL. Routing accuracy, RAG faithfulness, and latency — CI-gated on every PR.
+
+More at [github.com/mehdi-loup](https://github.com/mehdi-loup).
